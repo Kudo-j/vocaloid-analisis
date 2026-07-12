@@ -1,0 +1,42 @@
+# Python関連のキャッシュや一時ファイル
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 仮想環境
+venv/
+env/
+.venv/
+
+# エディタやOSの隠しファイル
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 音声データ、パラメータデータ（巨大なファイル）
+*.wav
+*.flac
+*.mp3
+*.mp4
+*.vsqx
+*.vsq
+*.mid
+*.midi
+*.npz
+*.npy
+
+# DNNモデルの重みやログ出力
+*.pth
+*.pt
+*.ckpt
+*.log
+logs/
+runs/
+checkpoints/
+
+# その他
+Testdata/
+*.json
+*.csv
