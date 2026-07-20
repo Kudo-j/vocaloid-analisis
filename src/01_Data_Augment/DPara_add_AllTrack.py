@@ -407,9 +407,7 @@ def _generate_natural_curve_cc(
             t = max(start_time + 1, min(end_time - 1, base_t + jitter_t))
             delta = random.randint(min_fluctuation, max_fluctuation)
             direction = random.choice([1, -1])
-            control_points.append(
-                (t, clamp(target_base + delta * direction, param_id))
-            )
+            control_points.append((t, clamp(target_base + delta * direction, param_id)))
 
     # 終点
     noise = random.randint(-return_noise, return_noise)
@@ -429,11 +427,282 @@ def _generate_natural_curve_cc(
             rate = (t - t1) / seg_dur
             f = ease_in_out(rate)
             v = v1 + (v2 - v1) * f
-            j = random.randint(-jitter_amount, jitter_amount) if jitter_amount > 0 else 0
+            j = (
+                random.randint(-jitter_amount, jitter_amount)
+                if jitter_amount > 0
+                else 0
+            )
             result.append((t, clamp(v + j, param_id)))
 
     result.append((end_time, control_points[-1][1]))
     return result
+
+
+# --- ★ 追加: 波状パターン（合成波オーバーレイ）生成関数 ---
+def _generate_wave_overlay(
+    phrase_notes: list,
+    phrase_start_t: int,
+    phrase_end_t: int,
+    param_id: str,
+    amplitude_ratio: float = 0.5,
+    fade_in_ticks: int = 480,
+) -> list:
+    """ノート間の区間ごとに合成波を生成し、フレーズ先頭でフェードインする波オーバーレイのデルタ値リストを返す。
+
+    Args:
+        phrase_notes: フレーズ内のノート情報リスト [{"t": ..., "dur": ..., "n": ...}, ...]
+        phrase_start_t: フレーズ開始tick
+        phrase_end_t: フレーズ終了tick
+        param_id: パラメータID ("D", "B", etc.)
+        amplitude_ratio: PARAM_MAP の fluctuation に対する波の振幅比率 (0.0~1.0)
+        fade_in_ticks: フレーズ先頭からフェードインする長さ(tick)
+
+    Returns:
+        [(tick, delta_value), ...] のリスト。ベースカーブに加算して使う。
+    """
+    if param_id not in PARAM_MAP:
+        return []
+    min_fluc, max_fluc = PARAM_MAP[param_id][2]
+    # 波の最大振幅（fluctuation の amplitude_ratio 倍）
+    max_amplitude = int((min_fluc + max_fluc) / 2 * amplitude_ratio)
+    if max_amplitude < 1:
+        return []
+
+    # --- ノート開始点リストの構築 ---
+    note_starts = []
+    for note in phrase_notes:
+        nt = note["t"]
+        if phrase_start_t <= nt <= phrase_end_t:
+            note_starts.append(nt)
+    if not note_starts:
+        return []
+    # 最後のノートの終端も境界として追加
+    note_starts.append(phrase_end_t)
+    # 重複除去・ソート
+    note_starts = sorted(set(note_starts))
+
+    MIN_HALF_PERIOD = 240  # 半周期の最小値 (8分音符)
+    MAX_HALF_PERIOD = 960  # 半周期の最大値 (2拍)
+    CROSSFADE_TICKS = 60  # 区間境界のクロスフェード長
+
+    # --- 合成波のモジュレーション用パラメータ（フレーズ全体で一定）---
+    phrase_duration = phrase_end_t - phrase_start_t
+    mod_period = (
+        random.uniform(phrase_duration * 0.6, phrase_duration * 1.2)
+        if phrase_duration > 0
+        else 1
+    )
+    mod_phase = random.uniform(0, 2 * math.pi)
+    mod_depth = random.uniform(0.2, 0.5)
+
+    # --- 各区間の波パラメータを事前に決定 ---
+    seg_params = []  # [(seg_start, seg_end, half_period, polarity, phase_jitter), ...]
+    for seg_idx in range(len(note_starts) - 1):
+        seg_start = note_starts[seg_idx]
+        seg_end = note_starts[seg_idx + 1]
+        seg_dur = seg_end - seg_start
+        if seg_dur <= 0:
+            continue
+
+        # 完全ランダムな半周期（240~960 tick の間で自由に選択）
+        half_period = random.randint(
+            MIN_HALF_PERIOD,
+            min(MAX_HALF_PERIOD, max(MIN_HALF_PERIOD, seg_dur)),
+        )
+
+        # 区間の開始が山(+1)か谷(-1)かをランダムに決定
+        polarity = random.choice([1, -1])
+
+        # 位相オフセット（人間らしさのためのズレ）
+        phase_jitter = random.randint(-20, 20)
+
+        seg_params.append((seg_start, seg_end, half_period, polarity, phase_jitter))
+
+    if not seg_params:
+        return []
+
+    # --- 各区間の波の値を計算するヘルパー関数 ---
+    def _calc_wave_at(t, seg_start, half_period, polarity, phase_jitter):
+        """指定tickにおける波のデルタ値（-1.0 ~ +1.0）を返す"""
+        local_t = t - seg_start + phase_jitter
+        angle = (local_t / half_period) * math.pi
+        return math.cos(angle) * polarity
+
+    # --- 波の描画（クロスフェード付き） ---
+    STEP = 30  # 描画密度（30 tick間隔 = 64分音符相当）
+    wave_deltas = []
+
+    # フレーズ全体を一定間隔でループ
+    overall_start = seg_params[0][0]
+    overall_end = seg_params[-1][1]
+
+    for t in range(overall_start, overall_end, STEP):
+        # --- このtickがどの区間に属するか判定 ---
+        current_seg_idx = None
+        for idx, (s_start, s_end, _, _, _) in enumerate(seg_params):
+            if s_start <= t < s_end:
+                current_seg_idx = idx
+                break
+        if current_seg_idx is None:
+            continue
+
+        cur_start, cur_end, cur_hp, cur_pol, cur_pj = seg_params[current_seg_idx]
+
+        # --- 現在の区間の波の値を計算 ---
+        wave_val = _calc_wave_at(t, cur_start, cur_hp, cur_pol, cur_pj)
+
+        # --- クロスフェード処理（区間境界付近） ---
+        # 区間の終端に近い場合: 次の区間の波とブレンド
+        dist_to_end = cur_end - t
+        if dist_to_end < CROSSFADE_TICKS and current_seg_idx + 1 < len(seg_params):
+            next_start, next_end, next_hp, next_pol, next_pj = seg_params[
+                current_seg_idx + 1
+            ]
+            next_wave_val = _calc_wave_at(t, next_start, next_hp, next_pol, next_pj)
+
+            # ブレンド率: 0.0（完全に現在の波）→ 1.0（完全に次の波）
+            blend = 1.0 - (dist_to_end / CROSSFADE_TICKS)
+            # ease-in-out でなだらかにブレンド
+            blend = 0.5 * (1 - math.cos(blend * math.pi))
+            wave_val = wave_val * (1.0 - blend) + next_wave_val * blend
+
+        # 区間の先頭に近い場合: 前の区間の波とブレンド
+        dist_from_start = t - cur_start
+        if dist_from_start < CROSSFADE_TICKS and current_seg_idx > 0:
+            prev_start, prev_end, prev_hp, prev_pol, prev_pj = seg_params[
+                current_seg_idx - 1
+            ]
+            prev_wave_val = _calc_wave_at(t, prev_start, prev_hp, prev_pol, prev_pj)
+
+            # ブレンド率: 1.0（完全に前の波）→ 0.0（完全に現在の波）
+            blend = 1.0 - (dist_from_start / CROSSFADE_TICKS)
+            blend = 0.5 * (1 - math.cos(blend * math.pi))
+            wave_val = wave_val * (1.0 - blend) + prev_wave_val * blend
+
+        # --- 振幅変調（モジュレーション波） ---
+        global_t = t - phrase_start_t
+        mod_factor = 1.0 + mod_depth * math.sin(
+            2 * math.pi * global_t / mod_period + mod_phase
+        )
+
+        # --- フェードイン (フレーズ先頭から fade_in_ticks かけて 0→1) ---
+        elapsed_from_start = t - phrase_start_t
+        if elapsed_from_start < fade_in_ticks:
+            fade = (elapsed_from_start / fade_in_ticks) ** 2
+        else:
+            fade = 1.0
+
+        # --- デルタ値を計算 ---
+        delta = wave_val * max_amplitude * mod_factor * fade
+        delta_int = int(round(delta))
+
+        wave_deltas.append((t, delta_int))
+
+    return wave_deltas
+
+
+def _apply_wave_overlay(
+    base_points: list,
+    wave_deltas: list,
+    param_id: str,
+) -> list:
+    """ベースカーブと波オーバーレイの座標リストを完全にマージ・補間して加算する。
+
+    Args:
+        base_points: [(tick, value), ...] ベースカーブの絶対値リスト
+        wave_deltas: [(tick, delta), ...] 波オーバーレイのデルタ値リスト
+        param_id: パラメータID (clamp用)
+
+    Returns:
+        [(tick, value), ...] 波が合成された新しい座標リスト
+    """
+    if not base_points:
+        return wave_deltas  # ベースがない場合は波だけを返す（実質あり得ないが念のため）
+    if not wave_deltas:
+        return base_points
+
+    # ベースカーブの補間準備
+    sorted_base = sorted(base_points, key=lambda x: x[0])
+    base_times = [p[0] for p in sorted_base]
+    base_vals = [p[1] for p in sorted_base]
+    base_dict = {t: v for t, v in sorted_base}
+
+    def _interpolate_base(t):
+        if t <= base_times[0]:
+            return base_vals[0]
+        if t >= base_times[-1]:
+            return base_vals[-1]
+        lo, hi = 0, len(base_times) - 1
+        while lo < hi - 1:
+            mid = (lo + hi) // 2
+            if base_times[mid] <= t:
+                lo = mid
+            else:
+                hi = mid
+        t1, v1 = base_times[lo], base_vals[lo]
+        t2, v2 = base_times[hi], base_vals[hi]
+        if t2 == t1:
+            return v1
+        ratio = (t - t1) / (t2 - t1)
+        return v1 + (v2 - v1) * ratio
+
+    # 波カーブの補間準備
+    sorted_wave = sorted(wave_deltas, key=lambda x: x[0])
+    wave_times = [p[0] for p in sorted_wave]
+    wave_vals = [p[1] for p in sorted_wave]
+    wave_dict = {t: v for t, v in sorted_wave}
+
+    def _interpolate_wave(t):
+        if t <= wave_times[0]:
+            return wave_vals[0]
+        if t >= wave_times[-1]:
+            return wave_vals[-1]
+        lo, hi = 0, len(wave_times) - 1
+        while lo < hi - 1:
+            mid = (lo + hi) // 2
+            if wave_times[mid] <= t:
+                lo = mid
+            else:
+                hi = mid
+        t1, v1 = wave_times[lo], wave_vals[lo]
+        t2, v2 = wave_times[hi], wave_vals[hi]
+        if t2 == t1:
+            return v1
+        ratio = (t - t1) / (t2 - t1)
+        return v1 + (v2 - v1) * ratio
+
+    # --- グリッドへの再サンプリング（時間分解能の統一） ---
+    GRID_SIZE = 30  # 15 tick = 128分音符相当
+
+    # 描画範囲の開始から終了までを求める
+    start_t = min(base_times[0], wave_times[0])
+    end_t = max(base_times[-1], wave_times[-1])
+
+    # 開始時間をグリッドに合わせる（15の倍数に丸める）
+    aligned_start = (start_t // GRID_SIZE) * GRID_SIZE
+
+    result_points = []
+    # グリッド間隔で等間隔にループ
+    for t in range(aligned_start, end_t + GRID_SIZE, GRID_SIZE):
+        # はみ出し防止
+        if t < start_t:
+            t = start_t
+        if t > end_t:
+            t = end_t
+
+        b_val = _interpolate_base(t)
+        w_delta = _interpolate_wave(t)
+
+        # 最終的な値を計算
+        final_val = clamp(b_val + w_delta, param_id)
+        result_points.append((t, final_val))
+
+        if t == end_t:
+            break
+
+    # 重複tickを削除して返す（辞書を経由）
+    result_dict = {t: v for t, v in result_points}
+    return sorted(result_dict.items(), key=lambda x: x[0])
 
 
 # --- 追加: 重なり判定用関数 ---
@@ -519,6 +788,9 @@ def augment_vsqx_params(
     return_val_noise_range: int,
     flat_phrase_probability: float = 0.1,  # ★追加: ベタ打ち確率
     note_attack_min_dur: int = 240,  # ★追加: スパイク対象最小ノート長
+    wave_overlay_probability: float = 0.0,  # ★追加: 波オーバーレイ確率
+    wave_amplitude_ratio: float = 0.5,  # ★追加: 波の振幅比率
+    wave_fade_in_ticks: int = 480,  # ★追加: 波のフェードイン長
 ):
     try:
         with open(vsqx_path, "r", encoding="utf-8") as f:
@@ -624,7 +896,10 @@ def augment_vsqx_params(
 
                     # ★ 改善: 10%の確率で「何もしない(ベタ打ち)」
                     apply_chance = random.random()
-                    if config_mode.startswith("random") and apply_chance < flat_phrase_probability:
+                    if (
+                        config_mode.startswith("random")
+                        and apply_chance < flat_phrase_probability
+                    ):
                         continue
 
                     points = []
@@ -676,6 +951,29 @@ def augment_vsqx_params(
                         )
 
                     if points:
+                        # ★ 追加: 波オーバーレイの適用判定
+                        if (
+                            wave_overlay_probability > 0
+                            and random.random() < wave_overlay_probability
+                        ):
+                            wave_deltas = _generate_wave_overlay(
+                                phrase_notes=phrase,
+                                phrase_start_t=phrase_start_t,
+                                phrase_end_t=phrase_end_t,
+                                param_id=param_id,
+                                amplitude_ratio=wave_amplitude_ratio,
+                                fade_in_ticks=wave_fade_in_ticks,
+                            )
+                            if wave_deltas:
+                                points = _apply_wave_overlay(
+                                    points, wave_deltas, param_id
+                                )
+                                logging.debug(
+                                    f"      Wave overlay applied: {param_id} "
+                                    f"({phrase_start_t}-{phrase_end_t}), "
+                                    f"{len(wave_deltas)} delta points"
+                                )
+
                         add_curve_to_dict(param_id, points, final_ccs)
                         # ★ 変更: 予約対象に新しいモードも追加
                         # ほとんど全てのモードが「区間予約」すべき対象になったので条件を広げる
@@ -750,6 +1048,28 @@ def augment_vsqx_params(
                             add_curve_to_dict(param_id, points, final_ccs)
                         last_attack_t = curr_t
 
+            # ★ 追加: もし1つもパラメータが追加されていなければ（すべてベタ打ち等でスキップされた場合）、
+            # 最低1つのフレーズにはパラメータを追加する（最低保証）
+            if not final_ccs and phrases and augmentation_targets:
+                guaranteed_phrase = random.choice(phrases)
+                if guaranteed_phrase:
+                    g_start_t = guaranteed_phrase[0]["t"]
+                    g_end_t = guaranteed_phrase[-1]["t"] + guaranteed_phrase[-1]["dur"]
+                    target = random.choice(augmentation_targets)
+                    param_id = target.get("id")
+                    if param_id in PARAM_MAP:
+                        current_base = track_base_values.get(param_id, 64)
+                        points = _generate_natural_curve_cc(
+                            g_start_t,
+                            g_end_t,
+                            param_id,
+                            current_base,
+                            return_val_noise_range,
+                            phrase_notes=guaranteed_phrase,
+                        )
+                        if points:
+                            add_curve_to_dict(param_id, points, final_ccs)
+
             if not final_ccs:
                 return track_content
 
@@ -812,6 +1132,9 @@ def process_files(config: dict):
     return_m = config.get("return_value_noise", 0)
     flat_prob = config.get("flat_phrase_probability", 0.1)  # ★追加
     min_dur = config.get("note_attack_min_dur", 240)  # ★追加
+    wave_prob = config.get("wave_overlay_probability", 0.0)  # ★追加: 波オーバーレイ確率
+    wave_amp = config.get("wave_amplitude_ratio", 0.5)  # ★追加: 波の振幅比率
+    wave_fade = config.get("wave_fade_in_ticks", 480)  # ★追加: 波のフェードイン長
 
     if not all([input_dir, output_base_dir]):
         logging.error("エラー: config不足")
@@ -846,7 +1169,7 @@ def process_files(config: dict):
     fail_count = 0
     for vsqx_path in vsqx_files:
         original_filename = Path(vsqx_path).stem
-        output_filename = f"{original_filename}_aug3.vsqx"
+        output_filename = f"{original_filename}_aug.vsqx"
         output_path = os.path.join(output_dir, output_filename)
         if augment_vsqx_params(
             vsqx_path,
@@ -864,6 +1187,9 @@ def process_files(config: dict):
             return_m,
             flat_prob,  # ★追加
             min_dur,  # ★追加
+            wave_prob,  # ★追加: 波オーバーレイ確率
+            wave_amp,  # ★追加: 波の振幅比率
+            wave_fade,  # ★追加: 波のフェードイン長
         ):
             success_count += 1
         else:
@@ -877,8 +1203,11 @@ if __name__ == "__main__":
 
     # ▼▼▼ 設定をここで行う ▼▼▼
     execution_config = {
-        "input_dir": "./data/vsqx_ALL/original/got_original/vspart_merged/Dynamic",
-        "output_base_dir": "./data/vsqx_ALL/original/got_original/augment/Dynamic",
+        # "input_dir": "./data/vsqx_ALL/original/got_original/vspart_merged/non_dynamic",
+        "input_dir": "./data/あ_DYN160A3",
+        # D:\黒岩研究室\卒研\26Voca_Ana\data\あ_DYN160A3
+        # "output_base_dir": "./data/vsqx_ALL/original/got_original/augment2/non_dynamic",
+        "output_base_dir": "./data/あ_DYN160A3",
         # ★ モード一覧:
         # "crescendo" / "decrescendo" : フレーズ全体の抑揚
         # "attack_dip"                : フレーズの頭で「下がって上がる」
@@ -891,31 +1220,35 @@ if __name__ == "__main__":
         # (必須) フレーズ単位の拡張ターゲット
         "augmentation_targets": [
             {"id": "D", "mode": "random_all"},  # DYN (ダイナミクス)
-            {"id": "B", "mode": "random_all"},  # BRE (ブレシネス)
-            {"id": "R", "mode": "random_all"},  # BRI (ブライトネス)
-            {"id": "C", "mode": "random_all"},  # CLE (クリアネス)
-            {"id": "G", "mode": "random_all"},  # GEN (ジェンダーファクター)
-            {"id": "P", "mode": "random_attack"},  # PIT (ピッチベンド)
-            {"id": "S", "mode": "random_all"},  # PBS (ピッチベンドセンシティビティ)
-            {"id": "W", "mode": "random_all"},  # GWL (グロウル)
-            {"id": "X", "mode": "random_all"},  # XSY (クロスシンセシス)
-            {"id": "T", "mode": "random_all"},  # POR (ポルタメント)
+            # {"id": "B", "mode": "random_all"},  # BRE (ブレシネス)
+            # {"id": "R", "mode": "random_all"},  # BRI (ブライトネス)
+            # {"id": "C", "mode": "random_all"},  # CLE (クリアネス)
+            # {"id": "G", "mode": "random_all"},  # GEN (ジェンダーファクター)
+            # {"id": "P", "mode": "random_attack"},  # PIT (ピッチベンド)
+            # {"id": "S", "mode": "random_all"},  # PBS (ピッチベンドセンシティビティ)
+            # {"id": "W", "mode": "random_all"},  # GWL (グロウル)
+            # {"id": "X", "mode": "random_all"},  # XSY (クロスシンセシス)
+            # {"id": "T", "mode": "random_all"},  # POR (ポルタメント)
         ],
         # ジャンプ時に適用するパラメータID (リスト)
         "jump_rise_param_ids": ["D", "P", "B"],
         "jump_rise_probability": 0.8,
         # ランダムアタックで適用するパラメータID (リスト)
         "note_attack_param_ids": ["D", "B", "R", "C", "G", "P", "S", "W", "X", "T"],
-        "note_attack_probability": 0.2,
+        "note_attack_probability": 0.0,
         "attack_pre_duration_min": 30,
         "attack_pre_duration_max": 100,
         "attack_post_duration_min": 240,
         "attack_post_duration_max": 480,
         "base_value_noise": 20,  # n: 初期値が 64±20 (44~84) の間で決まる
         "return_value_noise": 15,  # m: 戻るときに 基準値±15 の誤差が乗る
-        # ★ 追加: 改善用パラメータ
+        #  改善用パラメータ
         "flat_phrase_probability": 0.1,  # フレーズを「何もしない」確率 (10%)
         "note_attack_min_dur": 240,  # スパイク対象の最小ノート長 (8分音符以上)
+        # 波状パターン（合成波オーバーレイ）
+        "wave_overlay_probability": 0.5,  # ベースカーブに波を重ねる確率 (50%)
+        "wave_amplitude_ratio": 0.5,  # 波の振幅比率 (fluctuationの50%)
+        "wave_fade_in_ticks": 480,  # フレーズ先頭のフェードイン長 (4分音符1つ分)
     }
     # ▲▲▲ 設定はここまで ▲▲▲
 
