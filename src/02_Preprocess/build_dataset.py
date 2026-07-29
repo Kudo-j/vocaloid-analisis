@@ -1,0 +1,275 @@
+"""
+build_dataset.py
+================
+AudioFeatureExtractor と VSQXExtractor を利用して、
+WAV/VSQX ペアから学習用データセット (.npz) を構築するスクリプト。
+
+従来の preprocess.py の build_dataset メソッドと同等の処理を、
+分離されたユーティリティクラスを呼び出す形で再実装したもの。
+"""
+
+import os
+import sys
+import json
+import numpy as np
+import librosa
+import gc
+import traceback
+
+# --- パス設定 ---
+# util フォルダをインポートパスに追加
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "util"))
+
+import config
+from feature_extractor import AudioFeatureExtractor
+from vsqx_dnn_formatter import VSQXDNNFormatter
+
+
+def _flatten_input_config(config_item):
+    """
+    リストと文字列が混在する設定(INPUT_VSQX_PARAMS)を
+    フラットな文字列リストに展開する。
+    VSQXExtractor にも同名メソッドがあるが、build_dataset 側でも
+    config 解析のために独立して使用する。
+    """
+    flat_list = []
+    if isinstance(config_item, list):
+        for item in config_item:
+            flat_list.extend(_flatten_input_config(item))
+    else:
+        flat_list.append(config_item)
+    return flat_list
+
+
+def build_dataset(wav_dir, vsqx_dir, output_dir):
+    """
+    WAV/VSQX ペアを走査し、音響特徴量とVSQXパラメータを抽出して
+    .npz 形式のデータセットを構築する。
+
+    処理フロー:
+      1. config の解析（入力/出力パラメータの決定、音素スキャンの要否判定）
+      2. WAV/VSQX ペアの収集
+      3. 第1パス: 全WAVから音響特徴量の全体統計量 (mean, std) を計算
+      4. 第2パス: 各ペアについて特徴量を抽出・正規化し .npz で保存
+      5. メタデータ (features.json) の保存
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # --- Extractor の初期化 ---
+    audio_extractor = AudioFeatureExtractor(sr=config.SR, hop_length=config.HOP_LENGTH)
+    vsqx_extractor = VSQXDNNFormatter(sr=config.SR, hop_length=config.HOP_LENGTH)
+
+    # --- config の解析 ---
+    input_param_ids = _flatten_input_config(config.INPUT_VSQX_PARAMS)
+    target_param_ids = []
+    for cat, p_list in config.TARGET_PARAM_CONFIG.items():
+        if isinstance(p_list, list):
+            target_param_ids.extend(p_list)
+        else:
+            target_param_ids.append(p_list)
+
+    # 音素("PHONEME_P")が入力・出力のいずれかに含まれているかチェック
+    use_phoneme = ("PHONEME_P" in input_param_ids) or (
+        "PHONEME_P" in target_param_ids
+    )
+
+    if use_phoneme:
+        vsqx_extractor.scan_all_phonemes(vsqx_dir)
+    else:
+        print("Skipping phoneme scan (PHONEME_P not found in config).")
+
+    # --- WAV/VSQX ペアの収集 ---
+    wav_files = {
+        os.path.splitext(f)[0]: os.path.join(r, f)
+        for r, _, fs in os.walk(wav_dir)
+        for f in fs
+        if f.endswith(".wav")
+    }
+    vsqx_files = {
+        os.path.splitext(f)[0]: os.path.join(r, f)
+        for r, _, fs in os.walk(vsqx_dir)
+        for f in fs
+        if f.endswith(".vsqx")
+    }
+
+    file_pairs = sorted(
+        [(k, wav_files[k], vsqx_files[k]) for k in wav_files if k in vsqx_files]
+    )
+    print(f"Processing {len(file_pairs)} pairs...")
+
+    # =====================================================================
+    # 第1パス: 全体統計量の計算 (Global Mean / Std for Z-score Normalization)
+    # =====================================================================
+    print("Calculating global statistics for audio features...")
+    sum_x = None
+    sum_sq_x = None
+    total_frames_all = 0
+
+    for idx, (name_stem, wav_path, _) in enumerate(file_pairs):
+        try:
+            # 特徴量抽出（正規化なし）
+            features = audio_extractor.get_features(wav_path, config.FEATURE_TYPES)
+
+            if sum_x is None:
+                dim = features.shape[1]
+                sum_x = np.zeros(dim, dtype=np.float64)
+                sum_sq_x = np.zeros(dim, dtype=np.float64)
+
+            sum_x += np.sum(features, axis=0)
+            sum_sq_x += np.sum(features**2, axis=0)
+            total_frames_all += features.shape[0]
+
+            if (idx + 1) % 100 == 0:
+                print(f"Stats scanning: {idx + 1}/{len(file_pairs)}")
+        except Exception as e:
+            print(f"Error reading {name_stem} for stats: {e}")
+
+    # 平均・標準偏差の算出
+    if total_frames_all > 0:
+        global_mean = sum_x / total_frames_all
+        global_var = (sum_sq_x / total_frames_all) - (global_mean**2)
+        # 負の値によるエラー防止とゼロ除算防止
+        global_std = np.sqrt(np.maximum(global_var, 1e-7))
+    else:
+        print("Warning: No valid audio frames found. Using default normalization.")
+        global_mean = 0.0
+        global_std = 1.0
+
+    print("Global statistics calculated.")
+
+    # =====================================================================
+    # メタデータ構造体の初期化
+    # =====================================================================
+    feature_info = {
+        "num_x_features": 0,
+        "num_y_features": 0,
+        "x_feature_map": [],
+        "y_feature_map": [],
+        "phoneme_map": vsqx_extractor.phoneme_map,
+        "num_phoneme_classes": vsqx_extractor.num_phoneme_classes,
+        "num_evec_classes": vsqx_extractor.num_evec_classes,
+        "file_lengths": {},
+        "feature_types": config.FEATURE_TYPES,
+        "input_vsqx_params": input_param_ids,
+        "target_vsqx_params": target_param_ids,
+        "sr": config.SR,
+        "hop_length": config.HOP_LENGTH,
+        # 統計データ (JSON保存用にリスト変換)
+        "audio_global_mean": (
+            global_mean.tolist()
+            if isinstance(global_mean, np.ndarray)
+            else global_mean
+        ),
+        "audio_global_std": (
+            global_std.tolist()
+            if isinstance(global_std, np.ndarray)
+            else global_std
+        ),
+    }
+    is_first = True
+
+    # =====================================================================
+    # 第2パス: データセット生成と保存
+    # =====================================================================
+    for name_stem, wav_path, vsqx_path in file_pairs:
+        try:
+            # --- Audio Processing ---
+            audio_features = audio_extractor.get_features(
+                wav_path, config.FEATURE_TYPES
+            )
+
+            # check_timelag.py で特徴量の種類に依存せず確実に同期チェックできるよう、
+            # 常に純粋なRMS（音量エンベロープ）を計算して保存する
+            y_raw = audio_extractor._load_audio(wav_path)
+            audio_env_raw = librosa.feature.rms(
+                y=y_raw, hop_length=config.HOP_LENGTH
+            )[0]
+            audio_env_raw = audio_env_raw[
+                : audio_features.shape[0]
+            ]  # フレーム長を合わせる
+
+            # Global Normalization (ファイル単体ではなく全体統計を使用)
+            audio_features = (audio_features - global_mean) / (global_std + 1e-7)
+            audio_features = np.nan_to_num(audio_features)
+
+            total_frames = audio_features.shape[0]
+
+            # --- VSQX Processing ---
+            raw_vsqx = vsqx_extractor.parse_vsqx(vsqx_path, total_frames)
+            if raw_vsqx is None:
+                continue
+            norm_vsqx = vsqx_extractor.normalize_features(raw_vsqx)
+
+            # --- Concatenate Features ---
+            X_list = [audio_features]
+            if is_first:
+                feature_info["x_feature_map"].append(
+                    {"name": "Audio_Features", "dim": audio_features.shape[1]}
+                )
+
+            for pid in input_param_ids:
+                data, dim = vsqx_extractor._get_feature_data(pid, norm_vsqx)
+                if data is not None:
+                    X_list.append(data)
+                    if is_first:
+                        feature_info["x_feature_map"].append(
+                            {"name": pid, "dim": dim}
+                        )
+
+            Y_list = []
+            for pid in target_param_ids:
+                data, dim = vsqx_extractor._get_feature_data(pid, norm_vsqx)
+                if data is not None:
+                    Y_list.append(data)
+                    if is_first:
+                        feature_info["y_feature_map"].append(
+                            {"name": pid, "dim": dim}
+                        )
+
+            X_arr = np.concatenate(X_list, axis=-1).astype(np.float32)
+            Y_arr = (
+                np.concatenate(Y_list, axis=-1).astype(np.float32)
+                if Y_list
+                else np.empty((total_frames, 0), dtype=np.float32)
+            )
+            X_final, Y_final = X_arr, Y_arr
+
+            if is_first:
+                feature_info["num_x_features"] = X_final.shape[1]
+                feature_info["num_y_features"] = Y_final.shape[1]
+                is_first = False
+
+            voicing_mask_data = norm_vsqx["voicing_mask"]
+
+            np.savez_compressed(
+                os.path.join(output_dir, f"{name_stem}.npz"),
+                x=X_final,
+                y=Y_final,
+                voicing_mask=voicing_mask_data,
+                audio_env=audio_env_raw,
+            )
+            feature_info["file_lengths"][name_stem] = X_final.shape[0]
+            print(f"Saved: {name_stem} ({X_final.shape})")
+
+            # メモリを解放
+            del audio_features, raw_vsqx, norm_vsqx, X_arr, Y_arr, X_final, Y_final
+            gc.collect()
+
+        except Exception as e:
+            print(f"CRITICAL ERROR processing {name_stem}: {e}")
+            traceback.print_exc()
+
+    # --- メタデータの保存 ---
+    with open(
+        os.path.join(output_dir, "features.json"), "w", encoding="utf-8"
+    ) as f:
+        json.dump(feature_info, f, indent=4, ensure_ascii=False)
+    print("Dataset generation completed.")
+
+
+if __name__ == "__main__":
+    build_dataset(
+        wav_dir=config.WAV_DIR,
+        vsqx_dir=config.VSQX_DIR,
+        output_dir=config.OUTPUT_DIR,
+    )
