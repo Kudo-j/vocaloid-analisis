@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "..", "util"))
 
 import vowel_compare_config as cfg
+from vsqx_parser import VSQXParser
 from vsqx_reader import VSQXReader
 from audio_analyzer import AudioAnalyzer, FEATURE_DISPLAY_NAMES, FEATURE_PLOT_TYPES
 from vowel_diff_visualizer import VowelDiffVisualizer
@@ -126,7 +127,8 @@ def _find_param_files(prefix, param_name, data_dir):
 def _get_target_params():
     """解析対象パラメータのリストを返す"""
     if "ALL" in cfg.TARGET_PARAMS:
-        return cfg.DYNAMIC_PARAM_IDS
+        parser = VSQXParser(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+        return parser.vsqx_config["DYNAMIC_PARAM_IDS"]
     return cfg.TARGET_PARAMS
 
 

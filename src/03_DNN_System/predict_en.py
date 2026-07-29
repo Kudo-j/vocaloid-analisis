@@ -14,11 +14,18 @@ from typing import Dict, List, Any, Optional
 import sys
 import os
 
-# 02_Preprocess フォルダへのパスを追加
+# 02_Preprocess および util フォルダへのパスを追加
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "02_Preprocess")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "util")))
 
 import config
-from preprocess import VSQXPreprocessor
+from vsqx_dnn_formatter import VSQXDNNFormatter
+from vsqx_parser import VSQXParser
+from feature_extractor import AudioFeatureExtractor
+
+# VSQX仕様の取得
+_dummy_parser = VSQXParser(sr=44100, hop_length=256)
+VSQX_SPEC = _dummy_parser.vsqx_config
 from model_encoder import TransformerModel
 from train_encoder import (
     D_MODEL,
@@ -70,7 +77,7 @@ def denormalize_value(value: float, param_id: str) -> int:
     configの設定値を使用する。
     """
     # 1. Dynamic Parameters
-    if param_id in config.DYNAMIC_PARAM_IDS:
+    if param_id in VSQX_SPEC["DYNAMIC_PARAM_IDS"]:
         if param_id == "PIT":
             # PITは -8192 ~ 8191 (中心0)
             return int(value * 8192.0)
@@ -83,8 +90,8 @@ def denormalize_value(value: float, param_id: str) -> int:
             return int(np.clip(val, 0, 127))
 
     # 2. Note Parameters
-    elif param_id in config.NOTE_PARAM_IDS:
-        max_val = config.NOTE_PARAM_MAX_VALUES.get(param_id, 127.0)
+    elif param_id in VSQX_SPEC["NOTE_PARAM_IDS"]:
+        max_val = VSQX_SPEC["NOTE_PARAM_MAX_VALUES"].get(param_id, 127.0)
         if param_id in ["fallPort", "risePort"]:
             # 0.0 ~ 1.0
             return int(np.clip(value * max_val, 0, 127))
@@ -146,7 +153,7 @@ def update_vsqx_xml(
 
         # --- 1. 既存パラメータの削除 ---
         # 予測対象のタグID一覧 (DYN -> D)
-        inv_map = {v: k for k, v in config.ID_MAPPING.items()}
+        inv_map = {v: k for k, v in VSQX_SPEC["ID_MAPPING"].items()}
         target_tag_ids = set()
         for param_id in predictions.keys():
             tag_id = inv_map.get(param_id)
@@ -522,7 +529,12 @@ def predict_vsqx(args):
     print(f"Model input dim: {num_x_features}, output dim: {num_y_features}")
 
     # 2. Preprocessorの初期化
-    preprocessor = VSQXPreprocessor()
+    preprocessor = VSQXDNNFormatter(sr=config.SR, hop_length=config.HOP_LENGTH)
+    audio_extractor = AudioFeatureExtractor(sr=config.SR, hop_length=config.HOP_LENGTH)
+    
+    # 注入
+    preprocessor.vsqx_config["INPUT_VSQX_PARAMS"] = config.INPUT_VSQX_PARAMS
+    preprocessor.vsqx_config["TARGET_PARAM_CONFIG"] = config.TARGET_PARAM_CONFIG
     preprocessor.set_phoneme_map(feature_info["phoneme_map"])
 
     # 3. 入力データの作成 (X)
@@ -531,7 +543,7 @@ def predict_vsqx(args):
     # A. 音声 (features.jsonに記録された特徴量タイプを使用)
     feature_types = feature_info.get("feature_types", config.FEATURE_TYPES)
     print(f"  Audio feature types: {feature_types}")
-    audio_features = preprocessor.extractor.get_features(args.wav_path, feature_types)
+    audio_features = audio_extractor.get_features(args.wav_path, feature_types)
     audio_features = np.nan_to_num(stats.zscore(audio_features, axis=0))
     total_frames = audio_features.shape[0]
 
