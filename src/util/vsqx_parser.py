@@ -302,7 +302,7 @@ class VSQXParser:
                     except Exception as e:
                         print(f"Warning: Could not parse {vsqx_path}. Error: {e}")
 
-        # ID割り当て: silenceを0に固定
+        # 例外音素（silence, unknown）を除外してソート
         if "silence" in all_phonemes:
             all_phonemes.remove("silence")
         if "unknown" in all_phonemes:
@@ -310,18 +310,23 @@ class VSQXParser:
 
         sorted_phonemes = sorted(list(all_phonemes))
 
-        self.phoneme_map = {"silence": 0}
-        current_id = 1
+        self.phoneme_map = {}
+        current_id = 0
+        
+        # 1. 通常の音素に0から順にIDを割り当て
         for ph in sorted_phonemes:
             self.phoneme_map[ph] = current_id
             current_id += 1
 
-        # unknownを最後に追加
+        # 2. 例外音素（メタキーワード）を辞書の最後に追加
+        self.phoneme_map["silence"] = current_id
+        current_id += 1
         self.phoneme_map["unknown"] = current_id
+
         self.num_phoneme_classes = len(self.phoneme_map)
 
         print(
-            f"Found {self.num_phoneme_classes} unique phonemes. (silence ID is fixed to 0)"
+            f"Found {self.num_phoneme_classes} unique phonemes."
         )
         print(f"EVEC Map Loaded: {len(self.evec_map)} classes defined in config.")
 
