@@ -312,7 +312,7 @@ class VSQXParser:
 
         self.phoneme_map = {}
         current_id = 0
-        
+
         # 1. 通常の音素に0から順にIDを割り当て
         for ph in sorted_phonemes:
             self.phoneme_map[ph] = current_id
@@ -325,9 +325,7 @@ class VSQXParser:
 
         self.num_phoneme_classes = len(self.phoneme_map)
 
-        print(
-            f"Found {self.num_phoneme_classes} unique phonemes."
-        )
+        print(f"Found {self.num_phoneme_classes} unique phonemes.")
         print(f"EVEC Map Loaded: {len(self.evec_map)} classes defined in config.")
 
     def _get_tempo_map(self, root_xml):
@@ -347,7 +345,7 @@ class VSQXParser:
             for tempo_tag in master_track.findall("vsq4:tempo", self.ns):
                 t = int(tempo_tag.find("vsq4:t", self.ns).text)
                 v = int(tempo_tag.find("vsq4:v", self.ns).text)
-                bpm = v / 100.0
+                bpm = v / 100.0  # vsqxファイルではBPMが100倍の値で記録されているため
                 tempos.append((t, bpm))
 
         # フォールバック: データがない場合は初期値
