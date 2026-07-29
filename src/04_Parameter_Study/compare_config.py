@@ -132,42 +132,4 @@ PARAM_FEATURE_PRESETS = {
 COMPUTE_CORRELATION = True  # 相関係数を算出するか（TOP_N選出には必須）
 SORT_BY_CORRELATION = True  # 相関の強い順にプロットを並べるか
 
-# ===== VSQX解析で使用する定数 (config.py と同一) =====
-ID_MAPPING = {
-    "D": "DYN",
-    "B": "BRE",
-    "R": "BRI",
-    "C": "CLE",
-    "G": "GEN",
-    "T": "POR",
-    "P": "PIT",
-    "S": "PBS",
-    "W": "GWL",
-    "X": "XSY",
-}
 
-DEFAULT_DYNAMIC_VALUES = {
-    "DYN": 64,
-    "BRE": 0,
-    "BRI": 64,
-    "CLE": 0,
-    "GEN": 64,
-    "POR": 64,
-    "PIT": 0,
-    "PBS": 1,
-    "GWL": 0,
-    "XSY": 0,
-}
-
-DYNAMIC_PARAM_IDS = [
-    "DYN",
-    "BRE",
-    "BRI",
-    "CLE",
-    "GEN",
-    "POR",
-    "PIT",
-    "PBS",
-    "GWL",
-    "XSY",
-]

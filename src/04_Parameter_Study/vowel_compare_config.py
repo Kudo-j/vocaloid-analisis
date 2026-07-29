@@ -123,42 +123,4 @@ FIGSIZE_MATRIX = (20, 12)  # 相関マトリクスヒートマップ
 FIGSIZE_BAR = (18, 10)  # 棒グラフ比較
 FIGSIZE_DETAIL = (20, 24)  # 詳細時系列プロット
 
-# ===== VSQX解析で使用する定数 =====
-ID_MAPPING = {
-    "D": "DYN",
-    "B": "BRE",
-    "R": "BRI",
-    "C": "CLE",
-    "G": "GEN",
-    "T": "POR",
-    "P": "PIT",
-    "S": "PBS",
-    "W": "GWL",
-    "X": "XSY",
-}
 
-DEFAULT_DYNAMIC_VALUES = {
-    "DYN": 64,
-    "BRE": 0,
-    "BRI": 64,
-    "CLE": 0,
-    "GEN": 64,
-    "POR": 64,
-    "PIT": 0,
-    "PBS": 1,
-    "GWL": 0,
-    "XSY": 0,
-}
-
-DYNAMIC_PARAM_IDS = [
-    "DYN",
-    "BRE",
-    "BRI",
-    "CLE",
-    "GEN",
-    "POR",
-    "PIT",
-    "PBS",
-    "GWL",
-    "XSY",
-]
