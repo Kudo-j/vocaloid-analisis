@@ -7,13 +7,13 @@
 DATA_NAME = "あ"
 Para_id = "DYN"
 
-WAV_A = f"./src_result/Para_Study_data/wav/default/{DATA_NAME}_default.wav"  # パラメータなしの歌唱音声
-WAV_B = f"./src_result/Para_Study_data/wav/DYN/{DATA_NAME}_{Para_id}.wav"  # パラメータありの歌唱音声
-VSQX_A = f"./src_result/Para_Study_data/vsqx/default/{DATA_NAME}_default.vsqx"  # パラメータなしのVSQX
-VSQX_B = f"./src_result/Para_Study_data/vsqx/DYN/{DATA_NAME}_{Para_id}.vsqx"  # パラメータありのVSQX
+WAV_A = f"./Para_Study_data/wav/default/{DATA_NAME}_default.wav"  # パラメータなしの歌唱音声
+WAV_B = f"./Para_Study_data/wav/DYN/{DATA_NAME}_{Para_id}.wav"  # パラメータありの歌唱音声
+VSQX_A = f"./Para_Study_data/vsqx/default/{DATA_NAME}_default.vsqx"  # パラメータなしのVSQX
+VSQX_B = f"./Para_Study_data/vsqx/DYN/{DATA_NAME}_{Para_id}.vsqx"  # パラメータありのVSQX
 
 # ===== 出力設定 =====
-OUTPUT_DIR = f"./src_result/Para_Study_data/output/{Para_id}"
+OUTPUT_DIR = f"./Para_Study_data/output/{Para_id}"
 DPI = 300  # 出力画像の解像度
 FIGSIZE = (18, 28)  # 出力画像サイズ (インチ)
 

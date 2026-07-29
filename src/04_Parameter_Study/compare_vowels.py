@@ -34,6 +34,7 @@ from itertools import combinations
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "..", "util"))
 
 import vowel_compare_config as cfg
 from vsqx_reader import VSQXReader
