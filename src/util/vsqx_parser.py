@@ -348,18 +348,44 @@ class VSQXParser:
                 bpm = v / 100.0  # vsqxファイルではBPMが100倍の値で記録されているため
                 tempos.append((t, bpm))
 
-        # フォールバック: データがない場合は初期値
+        # エラー処理
         if not tempos:
-            tempos.append((0, 120.0))
+            raise ValueError(
+                "No tempo information found in the VSQX file. The file might be corrupted or missing a masterTrack."
+            )
 
         # Tick順にソート
         tempos.sort(key=lambda x: x[0])
 
-        # 最初のTickが0でない場合、0からの初期BPM(120)を追加
+        # 最初のTickが0でない場合、エラーで止めるのではなく、最初のBPMをコピーしてTick 0に挿入する
         if tempos[0][0] > 0:
-            tempos.insert(0, (0, 120.0))
+            tempos.insert(0, (0, tempos[0][1]))
 
         return tempos, resolution
+
+    def _shift_tempo_map(self, tempo_map, offset_ticks):
+        """
+        テンポマップのTickを offset_ticks 分だけマイナス方向にシフトし、
+        Tick 0 以降のマップとして再構築(クロップ)する。
+        これにより浮動小数点の丸め誤差を回避しつつ、正しいBPM区間を適用する。
+        """
+        if offset_ticks == 0:
+            return tempo_map
+
+        shifted = [(t - offset_ticks, bpm) for t, bpm in tempo_map]
+
+        # Tick 0 時点で有効なBPMを特定する
+        bpm_at_zero = shifted[0][1]
+        for t, bpm in shifted:
+            if t <= 0:
+                bpm_at_zero = bpm
+
+        final_map = [(0, bpm_at_zero)]
+        for t, bpm in shifted:
+            if t > 0:
+                final_map.append((t, bpm))
+
+        return final_map
 
     def _tick_to_second(self, target_tick, tempo_map, resolution):
         """
@@ -648,6 +674,10 @@ class VSQXParser:
         # 動的パラメータをtick順にソート
         for pid in all_dynamic_data:
             all_dynamic_data[pid].sort(key=lambda x: x["tick"])
+
+        # テンポマップのシフト処理 (DNN構築用のオフセット適用時)
+        if use_part_offset:
+            tempo_map = self._shift_tempo_map(tempo_map, pre_measure_ticks)
 
         return {
             "tempo_map": tempo_map,
