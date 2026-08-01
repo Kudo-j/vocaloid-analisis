@@ -45,6 +45,7 @@ class ValidDurationAnalyzer:
         self.action = config["action_for_short_files"]
         
         self.results = []
+        self.skipped_files = []  # スキップされたファイルとその理由を記録
         # VSQXReaderの初期化 (サンプリングレートは計算用に適当に設定)
         self.reader = VSQXReader(sr=44100, hop_length=512)
 
@@ -87,7 +88,12 @@ class ValidDurationAnalyzer:
                 "category": category
             }
         except Exception as e:
-            print(f"[Error] Failed to process {fname}: {e}")
+            print(f"[Skipped] {fname}: {type(e).__name__}: {e}")
+            self.skipped_files.append({
+                "file": fname,
+                "error_type": type(e).__name__,
+                "message": str(e),
+            })
             return None
 
     def run(self):
@@ -132,7 +138,23 @@ class ValidDurationAnalyzer:
         print(f"{'='*60}")
         for cat, count in summary_counts.items():
             print(f"  - {cat:<15}: {count} files")
+        if self.skipped_files:
+            print(f"  - {'Skipped':<15}: {len(self.skipped_files)} files")
         print("-" * 20)
+
+        # スキップレポートの出力
+        if self.skipped_files:
+            report_path = os.path.join(self.output_dir, "_reports", "skipped_report.txt")
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(f"Skipped Files Report\n")
+                f.write(f"====================\n")
+                f.write(f"Total: {len(self.skipped_files)} file(s) skipped\n\n")
+                for i, entry in enumerate(self.skipped_files, 1):
+                    f.write(f"[{i}] {entry['file']}\n")
+                    f.write(f"    Error: {entry['error_type']}\n")
+                    f.write(f"    Detail: {entry['message']}\n\n")
+            print(f"Skipped report saved: {report_path}")
+
         print(f"Done. Check folder: {self.output_dir}")
 
     def _export_csv(self):

@@ -357,6 +357,16 @@ class VSQXParser:
         # Tick順にソート
         tempos.sort(key=lambda x: x[0])
 
+        # テンポマップの整合性検証: 同一Tickに複数のテンポ設定がないか確認
+        seen_ticks = set()
+        for t, bpm in tempos:
+            if t in seen_ticks:
+                raise ValueError(
+                    f"Duplicate tempo definition at Tick {t}. "
+                    f"The VSQX file contains multiple tempo entries at the same position."
+                )
+            seen_ticks.add(t)
+
         # 最初のTickが0でない場合、最初のBPMをコピーしてTick 0に挿入する
         if tempos[0][0] > 0:
             tempos.insert(0, (0, tempos[0][1]))
@@ -374,12 +384,13 @@ class VSQXParser:
         # オフセット分BPMをシフト
         shifted = [(t - offset_ticks, bpm) for t, bpm in tempo_map]
 
-        # －になっているtickを削除
+        # tick=0直前までのBPMを取得
         bpm_at_zero = shifted[0][1]
         for t, bpm in shifted:
             if t <= 0:
                 bpm_at_zero = bpm
 
+        # tickが負になっているテンポデータを削除
         final_map = [(0, bpm_at_zero)]
         for t, bpm in shifted:
             if t > 0:
@@ -390,7 +401,16 @@ class VSQXParser:
     def _tick_to_second(self, target_tick, tempo_map, resolution):
         """
         テンポマップに基づいて Tick を絶対時間(秒)に変換する
+        BPMが変化すると単純にTick*60/reso/bpmでは計算できない（変化前のBPMで経過した時間がずれるので）
+        なのでテンポマップに基づいて累積時間を計算する
         """
+        # 入力値の検証: 負のTickがある場合はデータ不備
+        if target_tick < 0:
+            raise ValueError(
+                f"Negative target_tick ({target_tick}) detected. "
+                f"This indicates corrupted note or parameter data in the VSQX file."
+            )
+
         total_time = 0.0
         current_tick = 0
 
@@ -403,9 +423,6 @@ class VSQXParser:
                 end_tick = min(target_tick, next_tick)
             else:
                 end_tick = target_tick
-
-            if end_tick <= start_tick:
-                continue
 
             # この区間のTick数
             duration_tick = end_tick - max(start_tick, current_tick)
@@ -554,7 +571,6 @@ class VSQXParser:
             # パート開始Tick
             t_elem = vs_part.find("vsq4:t", self.ns)
             part_start_tick = int(t_elem.text) if t_elem is not None else 0
-
 
             # --- A. Dynamic Params (CC) ---
             for cc in vs_part.findall("vsq4:cc", self.ns):

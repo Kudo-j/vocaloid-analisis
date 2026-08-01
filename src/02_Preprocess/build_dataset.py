@@ -58,6 +58,10 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     # --- Extractor の初期化 ---
     audio_extractor = AudioFeatureExtractor(sr=config.SR, hop_length=config.HOP_LENGTH)
     vsqx_extractor = VSQXDNNFormatter(sr=config.SR, hop_length=config.HOP_LENGTH)
+    
+    # 高速化のため、実際に使用するパラメータ設定をパーサーに注入（オプトイン）
+    vsqx_extractor.vsqx_config["INPUT_VSQX_PARAMS"] = config.INPUT_VSQX_PARAMS
+    vsqx_extractor.vsqx_config["TARGET_PARAM_CONFIG"] = config.TARGET_PARAM_CONFIG
 
     # --- config の解析 ---
     input_param_ids = _flatten_input_config(config.INPUT_VSQX_PARAMS)
@@ -171,6 +175,8 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     # =====================================================================
     # 第2パス: データセット生成と保存
     # =====================================================================
+    skipped_files = []  # スキップされたファイルとその理由を記録するリスト
+
     for name_stem, wav_path, vsqx_path in file_pairs:
         try:
             # --- Audio Processing ---
@@ -256,15 +262,36 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             gc.collect()
 
         except Exception as e:
-            print(f"CRITICAL ERROR processing {name_stem}: {e}")
-            traceback.print_exc()
+            print(f"Skipped: {name_stem} ({type(e).__name__}: {e})")
+            skipped_files.append({
+                "file": name_stem,
+                "error_type": type(e).__name__,
+                "message": str(e),
+            })
 
     # --- メタデータの保存 ---
     with open(
         os.path.join(output_dir, "features.json"), "w", encoding="utf-8"
     ) as f:
         json.dump(feature_info, f, indent=4, ensure_ascii=False)
-    print("Dataset generation completed.")
+
+    # --- スキップレポートの出力 ---
+    num_success = len(file_pairs) - len(skipped_files)
+    print(f"\nDataset generation completed. "
+          f"Success: {num_success}/{len(file_pairs)}, "
+          f"Skipped: {len(skipped_files)}/{len(file_pairs)}")
+
+    if skipped_files:
+        report_path = os.path.join(output_dir, "skipped_report.txt")
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(f"Skipped Files Report\n")
+            f.write(f"====================\n")
+            f.write(f"Total: {len(skipped_files)} file(s) skipped\n\n")
+            for i, entry in enumerate(skipped_files, 1):
+                f.write(f"[{i}] {entry['file']}\n")
+                f.write(f"    Error: {entry['error_type']}\n")
+                f.write(f"    Detail: {entry['message']}\n\n")
+        print(f"Skipped report saved: {report_path}")
 
 
 if __name__ == "__main__":
