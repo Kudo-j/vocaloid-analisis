@@ -9,7 +9,7 @@ class VSQXDNNFormatter(VSQXParser):
         内部で read_sparse() を呼び出し、疎なデータを配列に変換する。
         """
         # --- Layer 1 呼び出し: 疎なデータの取得 ---
-        sparse_data = self.read_sparse(file_path, use_part_offset=True)
+        sparse_data = self.read_sparse(file_path)
         if sparse_data is None:
             return None
 
@@ -18,10 +18,30 @@ class VSQXDNNFormatter(VSQXParser):
         static_params = sparse_data["static_params"]
         voice_libraries = sparse_data["voice_libraries"]
 
+        # --- 利用するパラメータの特定 (オプトイン方式) ---
+        has_input = "INPUT_VSQX_PARAMS" in self.vsqx_config
+        has_target = "TARGET_PARAM_CONFIG" in self.vsqx_config
+        
+        if has_input or has_target:
+            input_params = self._flatten_input_config(self.vsqx_config.get("INPUT_VSQX_PARAMS", []))
+            target_params = []
+            for targets in self.vsqx_config.get("TARGET_PARAM_CONFIG", {}).values():
+                target_params.extend(targets)
+            # 実際に使うパラメータの集合 (O(1)で検索できるようにset化)
+            active_params = set(input_params + target_params)
+        else:
+            # 外部から設定が注入されていない場合は、安全のため従来通り全パラメータを有効化(フォールバック)
+            all_params = (self.vsqx_config.get("DYNAMIC_PARAM_IDS", []) + 
+                          self.vsqx_config.get("NOTE_PARAM_IDS", []) + 
+                          self.vsqx_config.get("STATIC_PARAM_IDS", []))
+            active_params = set(all_params)
+
         # --- 配列の初期化 ---
         # 正規化後に完全に0.0となるような中央値で初期化する
         dynamic_params_ts = {}
         for pid in self.vsqx_config["DYNAMIC_PARAM_IDS"]:
+            if pid not in active_params:
+                continue
             if pid == "PIT":
                 dynamic_params_ts[pid] = np.zeros(total_frames, dtype=np.float32)
             elif pid == "PBS":
@@ -31,10 +51,10 @@ class VSQXDNNFormatter(VSQXParser):
 
         note_params_ts = {}
         for pid in self.vsqx_config["NOTE_PARAM_IDS"]:
+            if pid not in active_params:
+                continue
             max_v = self.vsqx_config["NOTE_PARAM_MAX_VALUES"].get(pid, 1.0)
-            if pid in ["fallPort", "risePort"]:
-                note_params_ts[pid] = np.zeros(total_frames, dtype=np.float32)
-            elif pid == "vibType":
+            if pid in ["fallPort", "risePort", "vibType"]:
                 note_params_ts[pid] = np.zeros(total_frames, dtype=np.float32)
             else:
                 note_params_ts[pid] = np.full(
@@ -44,7 +64,7 @@ class VSQXDNNFormatter(VSQXParser):
             "NOTE_NUMBER": np.zeros(total_frames, dtype=np.float32),
             "DURATION": np.zeros(total_frames, dtype=np.float32),
         }
-        phoneme_ts = np.full(total_frames, "silence", dtype=object)
+        phoneme_ts = np.full(total_frames, "unknown", dtype=object)
         voicing_mask_ts = np.zeros(
             (total_frames, 1), dtype=np.float32
         )
@@ -54,7 +74,7 @@ class VSQXDNNFormatter(VSQXParser):
             pid: np.full(
                 total_frames, float(static_params.get(pid, 0)), dtype=np.float32
             )
-            for pid in self.vsqx_config["STATIC_PARAM_IDS"]
+            for pid in self.vsqx_config["STATIC_PARAM_IDS"] if pid in active_params
         }
 
         voice_lib_ts = np.zeros((total_frames, 2), dtype=np.int32)
@@ -147,6 +167,8 @@ class VSQXDNNFormatter(VSQXParser):
 
         # --- 動的パラメータの補間 (_interpolate_to_frames に統一) ---
         for param_id in self.vsqx_config["DYNAMIC_PARAM_IDS"]:
+            if param_id not in dynamic_params_ts:
+                continue  # 配列が確保されていない(使わない)パラメータは補間をスキップ
             tick_points = sparse_data["dynamic_params"].get(param_id, [])
             if tick_points:
                 # デフォルト値は配列初期化時と同じ値を使用

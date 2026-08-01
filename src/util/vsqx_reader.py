@@ -4,12 +4,11 @@ import xml.etree.ElementTree as ET
 from vsqx_parser import VSQXParser
 
 class VSQXReader(VSQXParser):
-    def __init__(self, sr=44100, hop_length=256, use_part_offset=False):
+    def __init__(self, sr=44100, hop_length=256):
         super().__init__(sr, hop_length)
-        self.use_part_offset = use_part_offset
 
     def read(self, vsqx_path):
-        sparse_data = self.read_sparse(vsqx_path, use_part_offset=self.use_part_offset)
+        sparse_data = self.read_sparse(vsqx_path)
         if sparse_data is None:
             return None
         

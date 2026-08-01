@@ -357,7 +357,7 @@ class VSQXParser:
         # Tick順にソート
         tempos.sort(key=lambda x: x[0])
 
-        # 最初のTickが0でない場合、エラーで止めるのではなく、最初のBPMをコピーしてTick 0に挿入する
+        # 最初のTickが0でない場合、最初のBPMをコピーしてTick 0に挿入する
         if tempos[0][0] > 0:
             tempos.insert(0, (0, tempos[0][1]))
 
@@ -367,14 +367,14 @@ class VSQXParser:
         """
         テンポマップのTickを offset_ticks 分だけマイナス方向にシフトし、
         Tick 0 以降のマップとして再構築(クロップ)する。
-        これにより浮動小数点の丸め誤差を回避しつつ、正しいBPM区間を適用する。
         """
         if offset_ticks == 0:
             return tempo_map
 
+        # オフセット分BPMをシフト
         shifted = [(t - offset_ticks, bpm) for t, bpm in tempo_map]
 
-        # Tick 0 時点で有効なBPMを特定する
+        # －になっているtickを削除
         bpm_at_zero = shifted[0][1]
         for t, bpm in shifted:
             if t <= 0:
@@ -467,15 +467,13 @@ class VSQXParser:
     # XMLへのアクセスはこのメソッドとそのヘルパーのみに限定する。
     # =====================================================================
 
-    def read_sparse(self, file_path, use_part_offset=False):
+    def read_sparse(self, file_path):
         """
         VSQXをパースし、全パラメータを tick 形式の疎な点データ辞書として返す。
+        テンポマップは常にvsPart開始Tick分シフトされ、WAV相対Tickに変換される。
 
         Args:
             file_path: VSQXファイルのパス
-            use_part_offset: True の場合、パート開始Tickからプリメジャーを
-                差し引いたオフセットを適用する（DNN用）。
-                False の場合、オフセットを適用しない（可視化用）。
 
         Returns:
             dict: 疎なデータ辞書。構造は以下の通り:
@@ -557,11 +555,6 @@ class VSQXParser:
             t_elem = vs_part.find("vsq4:t", self.ns)
             part_start_tick = int(t_elem.text) if t_elem is not None else 0
 
-            # オフセット計算
-            if use_part_offset:
-                part_offset = part_start_tick - pre_measure_ticks
-            else:
-                part_offset = 0
 
             # --- A. Dynamic Params (CC) ---
             for cc in vs_part.findall("vsq4:cc", self.ns):
@@ -571,7 +564,7 @@ class VSQXParser:
                     tag_id = v_elem.get("id")
                     param_id = self.vsqx_config["ID_MAPPING"].get(tag_id)
                     if param_id:
-                        abs_tick = int(t_cc.text) + part_offset
+                        abs_tick = int(t_cc.text)
                         all_dynamic_data[param_id].append(
                             {"tick": abs_tick, "value": int(v_elem.text)}
                         )
@@ -585,7 +578,7 @@ class VSQXParser:
                     rel_start_tick = int(note_t.text)
                     dur_tick = int(note_dur.text)
 
-                    abs_start_tick = rel_start_tick + part_offset
+                    abs_start_tick = rel_start_tick
                     abs_end_tick = abs_start_tick + dur_tick
 
                     # スカラーノートパラメータ（デフォルト値で初期化）
@@ -675,9 +668,9 @@ class VSQXParser:
         for pid in all_dynamic_data:
             all_dynamic_data[pid].sort(key=lambda x: x["tick"])
 
-        # テンポマップのシフト処理 (DNN構築用のオフセット適用時)
-        if use_part_offset:
-            tempo_map = self._shift_tempo_map(tempo_map, pre_measure_ticks)
+        # WAVはvsPartの開始点から書き出されるため、
+        # テンポマップをpart_start_tick分シフトしてWAV相対Tickに変換する
+        tempo_map = self._shift_tempo_map(tempo_map, part_start_tick)
 
         return {
             "tempo_map": tempo_map,

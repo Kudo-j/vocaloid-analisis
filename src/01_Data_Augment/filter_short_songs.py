@@ -46,7 +46,7 @@ class ValidDurationAnalyzer:
         
         self.results = []
         # VSQXReaderの初期化 (サンプリングレートは計算用に適当に設定)
-        self.reader = VSQXReader(sr=44100, hop_length=512, use_part_offset=True)
+        self.reader = VSQXReader(sr=44100, hop_length=512)
 
     def _setup_directories(self):
         if os.path.exists(self.output_dir):
