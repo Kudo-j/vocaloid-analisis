@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "..", "util"))
 
 import vowel_compare_config as cfg
 from vsqx_parser import VSQXParser
-from vsqx_reader import VSQXReader
+from vsqx_compare import VSQXCompare
 from audio_analyzer import AudioAnalyzer, FEATURE_DISPLAY_NAMES, FEATURE_PLOT_TYPES
 from vowel_diff_visualizer import VowelDiffVisualizer
 
@@ -287,7 +287,7 @@ def main():
     print(f"  Features:    {feature_list}")
     print(f"  Conditions:  {len(cfg.VOWEL_CONDITIONS)}")
 
-    reader = VSQXReader(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+    reader = VSQXCompare(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
     analyzer = AudioAnalyzer(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
     visualizer = VowelDiffVisualizer(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
 

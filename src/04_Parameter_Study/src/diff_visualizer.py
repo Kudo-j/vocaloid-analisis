@@ -81,8 +81,8 @@ class DiffVisualizer:
 
         Args:
             param_name: 注目パラメータ名 (例: "DYN")
-            vsqx_data_a: VSQXReader.read() の出力 (default)
-            vsqx_data_b: VSQXReader.read() の出力 (with param)
+            vsqx_data_a: VSQXCompare.read() の出力 (default)
+            vsqx_data_b: VSQXCompare.read() の出力 (with param)
             features_a: AudioAnalyzer.extract_features() の出力
             features_b: AudioAnalyzer.extract_features() の出力
             diff_features: AudioAnalyzer.compute_diff() の出力
@@ -90,7 +90,7 @@ class DiffVisualizer:
             sorted_features: 相関順にソートされた [(name, info), ...]
             param_curve: np.ndarray (T,) — VSQXパラメータ時系列
             default_value: パラメータのデフォルト値
-            static_diffs: VSQXReader.find_static_param_diffs() の出力
+            static_diffs: VSQXCompare.find_static_param_diffs() の出力
             output_path: 出力ファイルパス
         """
         n_feature_plots = len(sorted_features)

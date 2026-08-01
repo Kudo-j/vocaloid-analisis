@@ -14,7 +14,7 @@ VSQX_READER_DIR = os.path.join(SRC_DIR, "04_Parameter_Study", "src")
 sys.path.insert(0, VSQX_READER_DIR)
 
 try:
-    from vsqx_reader import VSQXReader
+    from vsqx_compare import VSQXCompare
 except ImportError:
     print(f"[Error] vsqx_reader.py could not be imported from {VSQX_READER_DIR}")
     sys.exit(1)
@@ -46,8 +46,8 @@ class ValidDurationAnalyzer:
         
         self.results = []
         self.skipped_files = []  # スキップされたファイルとその理由を記録
-        # VSQXReaderの初期化 (サンプリングレートは計算用に適当に設定)
-        self.reader = VSQXReader(sr=44100, hop_length=512)
+        # VSQXCompareの初期化 (サンプリングレートは計算用に適当に設定)
+        self.reader = VSQXCompare(sr=44100, hop_length=512)
 
     def _setup_directories(self):
         if os.path.exists(self.output_dir):

@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "..", "util"))
 
 import compare_config as cfg
-from vsqx_reader import VSQXReader
+from vsqx_compare import VSQXCompare
 from audio_analyzer import AudioAnalyzer
 from diff_visualizer import DiffVisualizer
 
@@ -138,7 +138,7 @@ def main():
 
     # --- 2. VSQX解析 ---
     print("\n[Step 1] Parsing VSQX files...")
-    reader = VSQXReader(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+    reader = VSQXCompare(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
 
     vsqx_data_a = reader.read_sparse(path_vsqx_a)
     vsqx_data_b = reader.read_sparse(path_vsqx_b)

@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "..", "util"))
 
 import compare_config as cfg
-from vsqx_reader import VSQXReader
+from vsqx_compare import VSQXCompare
 from audio_analyzer import AudioAnalyzer, FEATURE_DISPLAY_NAMES, FEATURE_PLOT_TYPES, FEATURE_YLABELS
 
 def _setup_japanese_font():
@@ -210,7 +210,7 @@ def main():
             sys.exit(1)
 
     print("\n[Step 1] Parsing VSQX...")
-    reader = VSQXReader(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+    reader = VSQXCompare(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
     vsqx_data = reader.read(path_vsqx)
     if vsqx_data is None:
         print("ERROR: Failed to parse VSQX file.")
