@@ -348,7 +348,7 @@ class VSQXParser:
                 bpm = v / 100.0  # vsqxファイルではBPMが100倍の値で記録されているため
                 tempos.append((t, bpm))
 
-        # エラー処理
+        # テンポがない場合のエラー処理
         if not tempos:
             raise ValueError(
                 "No tempo information found in the VSQX file. The file might be corrupted or missing a masterTrack."
@@ -444,23 +444,15 @@ class VSQXParser:
         {"tick": int, "value": int} 形式の点データリストを
         フレーム単位の密な1次元配列に線形補間する。
 
-        既存の parse_vsqx 内 L702-L721 の直書き処理を共通メソッドとして切り出したもの。
-        アルゴリズムは完全に既存のものを踏襲する。
-
-        Args:
-            tick_points: [{"tick": int, "value": int}, ...] 形式の点データリスト
-            tempo_map: _get_tempo_map() の戻り値 [(tick, bpm), ...]
-            resolution: VSQXの分解能 (通常480)
-            total_frames: 出力フレーム数
-            default_value: tick_points が空の場合のフォールバック値
+        tick_points: [{"tick": int, "value": int}, ...] 形式の点データリスト
 
         Returns:
-            np.ndarray: shape (total_frames,) の補間済み配列
+        np.ndarray: shape (total_frames,) の補間済み配列
         """
         if not tick_points:
             return np.full(total_frames, default_value, dtype=np.float32)
 
-        # Tick順にソート（パートまたぎで順序が崩れている可能性があるため）
+        # Tick順にソート
         sorted_points = sorted(tick_points, key=lambda x: x["tick"])
 
         # 各点の tick を秒に変換
@@ -517,6 +509,7 @@ class VSQXParser:
         tempo_map, resolution = self._get_tempo_map(root)
 
         # --- 2. PreMeasure ---
+        # 基本4小節だが、書き換え可能なので取得する
         pre_measure = 4
         master_track = root.find(".//vsq4:masterTrack", self.ns)
         if master_track is not None:
@@ -555,130 +548,133 @@ class VSQXParser:
                 break
 
         if target_track is None:
-            print(f"Skip: No track 0 found in {file_path}")
-            return None
+            raise ValueError(f"No track 0 found in {file_path}")
 
         # --- 5. Part Parsing ---
         vs_parts = target_track.findall("vsq4:vsPart", self.ns)
         if not vs_parts:
-            print(f"Skip: No vsPart found in Track 0 of {file_path}")
-            return None
+            raise ValueError(f"No vsPart (singing data) found in Track 0 of {file_path}")
+        if len(vs_parts) >= 2:
+            raise ValueError(
+                f"Multiple vsParts ({len(vs_parts)}) found in Track 0 of {file_path}. "
+                f"Only single vsPart is supported."
+            )
 
         all_dynamic_data = defaultdict(list)
         all_notes = []
 
-        for vs_part in vs_parts:
-            # パート開始Tick
-            t_elem = vs_part.find("vsq4:t", self.ns)
-            part_start_tick = int(t_elem.text) if t_elem is not None else 0
+        vs_part = vs_parts[0]
+        # パート開始Tick
+        t_elem = vs_part.find("vsq4:t", self.ns)
+        part_start_tick = int(t_elem.text) if t_elem is not None else 0
 
-            # --- A. Dynamic Params (CC) ---
-            for cc in vs_part.findall("vsq4:cc", self.ns):
-                v_elem = cc.find("vsq4:v", self.ns)
-                t_cc = cc.find("vsq4:t", self.ns)
-                if v_elem is not None and t_cc is not None:
-                    tag_id = v_elem.get("id")
-                    param_id = self.vsqx_config["ID_MAPPING"].get(tag_id)
-                    if param_id:
-                        abs_tick = int(t_cc.text)
-                        all_dynamic_data[param_id].append(
-                            {"tick": abs_tick, "value": int(v_elem.text)}
-                        )
-
-            # --- B. Note Params ---
-            for note in vs_part.findall("vsq4:note", self.ns):
-                note_t = note.find("vsq4:t", self.ns)
-                note_dur = note.find("vsq4:dur", self.ns)
-
-                if note_t is not None and note_dur is not None:
-                    rel_start_tick = int(note_t.text)
-                    dur_tick = int(note_dur.text)
-
-                    abs_start_tick = rel_start_tick
-                    abs_end_tick = abs_start_tick + dur_tick
-
-                    # スカラーノートパラメータ（デフォルト値で初期化）
-                    n_params = {
-                        pid: self.vsqx_config["DEFAULT_NOTE_VALUES"].get(pid)
-                        for pid in self.vsqx_config["NOTE_PARAM_IDS"]
-                    }
-                    v_tag = note.find("vsq4:v", self.ns)
-                    if v_tag is not None:
-                        n_params["VEL"] = int(v_tag.text)
-
-                    nstyle = note.find("vsq4:nStyle", self.ns)
-                    if nstyle is not None:
-                        for v_style in nstyle.findall("vsq4:v", self.ns):
-                            pid = v_style.get("id")
-                            if pid in n_params and v_style.text:
-                                n_params[pid] = int(v_style.text)
-
-                    # シーケンスデータ (vibDep, vibRate)
-                    seqs = {}
-                    seq_target_ids = ["vibDep", "vibRate"]
-
-                    if nstyle is not None:
-                        for child in nstyle:
-                            seq_id = child.get("id")
-                            if seq_id in seq_target_ids:
-                                seq_data_points = []
-                                for cc_elem in child:
-                                    if "cc" in cc_elem.tag:
-                                        p_val = None
-                                        v_val = None
-                                        for sub in cc_elem:
-                                            if sub.tag.endswith("p"):
-                                                try:
-                                                    p_val = int(sub.text)
-                                                except Exception:
-                                                    pass
-                                            elif sub.tag.endswith("v"):
-                                                try:
-                                                    v_val = int(sub.text)
-                                                except Exception:
-                                                    pass
-                                        if p_val is not None and v_val is not None:
-                                            # 相対位置(0-65536) → 絶対tickに変換
-                                            rel_pos_ratio = p_val / 65536.0
-                                            point_abs_tick = int(
-                                                abs_start_tick
-                                                + (dur_tick * rel_pos_ratio)
-                                            )
-                                            seq_data_points.append(
-                                                {"tick": point_abs_tick, "value": v_val}
-                                            )
-                                if seq_data_points:
-                                    seqs[seq_id] = sorted(
-                                        seq_data_points, key=lambda x: x["tick"]
-                                    )
-
-                    # 音素・EVEC・連打の解析
-                    p_elem = note.find("vsq4:p", self.ns)
-                    p_text = p_elem.text if p_elem is not None else None
-                    parsed_info = self.parse_p_tag_final(p_text)
-
-                    # 歌詞
-                    lyric_elem = note.find("vsq4:y", self.ns)
-                    lyric = lyric_elem.text if lyric_elem is not None else ""
-
-                    # ノート番号
-                    note_n = note.find("vsq4:n", self.ns)
-                    note_num = int(note_n.text) if note_n is not None else 0
-
-                    all_notes.append(
-                        {
-                            "abs_start_tick": abs_start_tick,
-                            "abs_end_tick": abs_end_tick,
-                            "dur_tick": dur_tick,
-                            "note_num": note_num,
-                            "lyric": lyric,
-                            "phoneme": parsed_info["phoneme"],
-                            "evec_id": parsed_info["evec_id"],
-                            "repeat": parsed_info["repeat"],
-                            "params": n_params,
-                            "seqs": seqs,
-                        }
+        # --- A. Dynamic Params (CC) ---
+        for cc in vs_part.findall("vsq4:cc", self.ns):
+            v_elem = cc.find("vsq4:v", self.ns)
+            t_cc = cc.find("vsq4:t", self.ns)
+            if v_elem is not None and t_cc is not None:
+                tag_id = v_elem.get("id")
+                param_id = self.vsqx_config["ID_MAPPING"].get(tag_id)
+                if param_id:
+                    abs_tick = int(t_cc.text)
+                    all_dynamic_data[param_id].append(
+                        {"tick": abs_tick, "value": int(v_elem.text)}
                     )
+
+        # --- B. Note Params ---
+        for note in vs_part.findall("vsq4:note", self.ns):
+            note_t = note.find("vsq4:t", self.ns)
+            note_dur = note.find("vsq4:dur", self.ns)
+
+            if note_t is not None and note_dur is not None:
+                rel_start_tick = int(note_t.text)
+                dur_tick = int(note_dur.text)
+
+                abs_start_tick = rel_start_tick
+                abs_end_tick = abs_start_tick + dur_tick
+
+                # スカラーノートパラメータ（デフォルト値で初期化）
+                n_params = {
+                    pid: self.vsqx_config["DEFAULT_NOTE_VALUES"].get(pid)
+                    for pid in self.vsqx_config["NOTE_PARAM_IDS"]
+                }
+                v_tag = note.find("vsq4:v", self.ns)
+                if v_tag is not None:
+                    n_params["VEL"] = int(v_tag.text)
+
+                nstyle = note.find("vsq4:nStyle", self.ns)
+                if nstyle is not None:
+                    for v_style in nstyle.findall("vsq4:v", self.ns):
+                        pid = v_style.get("id")
+                        if pid in n_params and v_style.text:
+                            n_params[pid] = int(v_style.text)
+
+                # シーケンスデータ (vibDep, vibRate)
+                seqs = {}
+                seq_target_ids = ["vibDep", "vibRate"]
+
+                if nstyle is not None:
+                    for child in nstyle:
+                        seq_id = child.get("id")
+                        if seq_id in seq_target_ids:
+                            seq_data_points = []
+                            for cc_elem in child:
+                                if "cc" in cc_elem.tag:
+                                    p_val = None
+                                    v_val = None
+                                    for sub in cc_elem:
+                                        if sub.tag.endswith("p"):
+                                            try:
+                                                p_val = int(sub.text)
+                                            except Exception:
+                                                pass
+                                        elif sub.tag.endswith("v"):
+                                            try:
+                                                v_val = int(sub.text)
+                                            except Exception:
+                                                pass
+                                    if p_val is not None and v_val is not None:
+                                        # 相対位置(0-65536) → 絶対tickに変換
+                                        rel_pos_ratio = p_val / 65536.0
+                                        point_abs_tick = int(
+                                            abs_start_tick
+                                            + (dur_tick * rel_pos_ratio)
+                                        )
+                                        seq_data_points.append(
+                                            {"tick": point_abs_tick, "value": v_val}
+                                        )
+                            if seq_data_points:
+                                seqs[seq_id] = sorted(
+                                    seq_data_points, key=lambda x: x["tick"]
+                                )
+
+                # 音素・EVEC・連打の解析
+                p_elem = note.find("vsq4:p", self.ns)
+                p_text = p_elem.text if p_elem is not None else None
+                parsed_info = self.parse_p_tag_final(p_text)
+
+                # 歌詞
+                lyric_elem = note.find("vsq4:y", self.ns)
+                lyric = lyric_elem.text if lyric_elem is not None else ""
+
+                # ノート番号
+                note_n = note.find("vsq4:n", self.ns)
+                note_num = int(note_n.text) if note_n is not None else 0
+
+                all_notes.append(
+                    {
+                        "abs_start_tick": abs_start_tick,
+                        "abs_end_tick": abs_end_tick,
+                        "dur_tick": dur_tick,
+                        "note_num": note_num,
+                        "lyric": lyric,
+                        "phoneme": parsed_info["phoneme"],
+                        "evec_id": parsed_info["evec_id"],
+                        "repeat": parsed_info["repeat"],
+                        "params": n_params,
+                        "seqs": seqs,
+                    }
+                )
 
         # 動的パラメータをtick順にソート
         for pid in all_dynamic_data:
