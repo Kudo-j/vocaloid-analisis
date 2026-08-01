@@ -398,7 +398,7 @@ class VSQXParser:
 
         return final_map
 
-    def _tick_to_second(self, target_tick, tempo_map, resolution):
+    def tick_to_second(self, target_tick, tempo_map, resolution):
         """
         テンポマップに基づいて Tick を絶対時間(秒)に変換する
         BPMが変化すると単純にTick*60/reso/bpmでは計算できない（変化前のBPMで経過した時間がずれるので）
@@ -437,7 +437,7 @@ class VSQXParser:
 
         return total_time
 
-    def _interpolate_to_frames(
+    def interpolate_to_frames(
         self, tick_points, tempo_map, resolution, total_frames, default_value=64
     ):
         """
@@ -459,7 +459,7 @@ class VSQXParser:
         times_sec = []
         values = []
         for d in sorted_points:
-            sec = self._tick_to_second(d["tick"], tempo_map, resolution)
+            sec = self.tick_to_second(d["tick"], tempo_map, resolution)
             times_sec.append(sec)
             values.append(d["value"])
 
@@ -547,13 +547,18 @@ class VSQXParser:
                 target_track = track
                 break
 
+        # track0がなかったらエラー
         if target_track is None:
             raise ValueError(f"No track 0 found in {file_path}")
 
         # --- 5. Part Parsing ---
         vs_parts = target_track.findall("vsq4:vsPart", self.ns)
+        # vspartなかったらエラー
         if not vs_parts:
-            raise ValueError(f"No vsPart (singing data) found in Track 0 of {file_path}")
+            raise ValueError(
+                f"No vsPart (singing data) found in Track 0 of {file_path}"
+            )
+        # vspart2個以上あったらエラー
         if len(vs_parts) >= 2:
             raise ValueError(
                 f"Multiple vsParts ({len(vs_parts)}) found in Track 0 of {file_path}. "
@@ -637,8 +642,7 @@ class VSQXParser:
                                         # 相対位置(0-65536) → 絶対tickに変換
                                         rel_pos_ratio = p_val / 65536.0
                                         point_abs_tick = int(
-                                            abs_start_tick
-                                            + (dur_tick * rel_pos_ratio)
+                                            abs_start_tick + (dur_tick * rel_pos_ratio)
                                         )
                                         seq_data_points.append(
                                             {"tick": point_abs_tick, "value": v_val}
@@ -695,15 +699,15 @@ class VSQXParser:
             "notes": sorted(all_notes, key=lambda n: n["abs_start_tick"]),
         }
 
-    # =====================================================================
-    # Layer 2: 密なデータ変換層
-    # read_sparse() の結果をDNN入力用の密なNumPy配列に変換する。
-    # =====================================================================
-
     def _extract_voice_info(
         self, vvoice_elem, id_tag, prm_tag, label, voice_libs, static_params
     ):
-        """Helper to extract voice library info"""
+        """
+        ボイスバンクを取得する。
+        ボーカルは1st, 2nd_vocalが存在し、記述形式はほぼ同じ。
+        read_sparseで処理を書くと2回同じことを書く必要があるので
+        別メソッドとして記述。
+        """
         id_elem = vvoice_elem.find(f"vsq4:{id_tag}", self.ns)
         if id_elem is not None and id_elem.text:
             v_name = self.vsqx_config["VOICE_LIB_ID_TO_NAME"].get(
@@ -719,6 +723,3 @@ class VSQXParser:
                     pid = param.tag.split("}")[-1].upper()
                     if param.text:
                         static_params[f"{pid}_{label}"] = int(param.text)
-
-    def tick_to_second(self, target_tick, tempo_map, resolution):
-        return self._tick_to_second(target_tick, tempo_map, resolution)

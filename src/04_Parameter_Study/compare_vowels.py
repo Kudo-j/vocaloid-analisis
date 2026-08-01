@@ -235,7 +235,7 @@ def _analyze_single_condition(condition, param_name, data_dir,
     # パラメータカーブ
     default_value = cfg.DEFAULT_DYNAMIC_VALUES.get(param_name, 64)
     control_points = vsqx_b["dynamic_params"].get(param_name, [])
-    param_curve = reader.interpolate_param_to_frames(
+    param_curve = reader.interpolate_to_frames(
         control_points, total_frames, default_value=default_value
     )
 

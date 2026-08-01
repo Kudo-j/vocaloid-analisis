@@ -10,24 +10,26 @@ class VSQXReader(VSQXParser):
     def read(self, vsqx_path):
         sparse_data = self.read_sparse(vsqx_path)
         if sparse_data is None:
-            return None
+            raise ValueError(f"Failed to parse VSQX file (possibly empty or no target track): {vsqx_path}")
         
         tempo_map = sparse_data["tempo_map"]
         resolution = sparse_data["resolution"]
-        primary_tempo = tempo_map[0][1] if tempo_map else 120.0
+        if not tempo_map:
+            raise ValueError(f"No tempo map found in VSQX file: {vsqx_path}")
+        primary_tempo = tempo_map[0][1]
         
         dynamic_params = {}
         for pid, points in sparse_data["dynamic_params"].items():
             dynamic_params[pid] = [
-                (self._tick_to_second(pt["tick"], tempo_map, resolution), pt["value"])
+                (self.tick_to_second(pt["tick"], tempo_map, resolution), pt["value"])
                 for pt in points
             ]
             
         notes = []
         for note in sparse_data["notes"]:
             notes.append({
-                "start_sec": self._tick_to_second(note["abs_start_tick"], tempo_map, resolution),
-                "end_sec": self._tick_to_second(note["abs_end_tick"], tempo_map, resolution),
+                "start_sec": self.tick_to_second(note["abs_start_tick"], tempo_map, resolution),
+                "end_sec": self.tick_to_second(note["abs_end_tick"], tempo_map, resolution),
                 "note_num": note["note_num"],
                 "lyric": note["lyric"],
                 "phoneme": note["phoneme"],
@@ -44,25 +46,6 @@ class VSQXReader(VSQXParser):
 
     # =====================================================================
 
-    def interpolate_param_to_frames(self, tick_points, tempo_map, resolution,
-                                     total_frames, default_value=64):
-        """
-        可視化ツール向けの公開補間API。
-        内部で _interpolate_to_frames を呼ぶラッパー。
-
-        Args:
-            tick_points: [{"tick": int, "value": int}, ...] 形式の点データリスト
-            tempo_map: read_sparse() の戻り値に含まれる tempo_map
-            resolution: read_sparse() の戻り値に含まれる resolution
-            total_frames: 出力フレーム数
-            default_value: 制御点がない場合のデフォルト値
-
-        Returns:
-            np.ndarray: shape (total_frames,)
-        """
-        return self._interpolate_to_frames(
-            tick_points, tempo_map, resolution, total_frames, default_value
-        )
 
     def find_changed_params(self, vsqx_data_a, vsqx_data_b):
         """

@@ -237,7 +237,7 @@ def main():
 
         # VSQXパラメータをフレーム単位に補間
         control_points_b = vsqx_data_b["dynamic_params"].get(param_name, [])
-        param_curve = reader.interpolate_param_to_frames(
+        param_curve = reader.interpolate_to_frames(
             control_points_b, vsqx_data_b["tempo_map"], vsqx_data_b["resolution"],
             total_frames, default_value=default_value
         )

@@ -119,13 +119,13 @@ class VSQXDNNFormatter(VSQXParser):
                     note_params_ts[pid][s_idx:e_idx] = val
 
             # 2. シーケンスデータの補間 (vibDep, vibRate)
-            #    _interpolate_to_frames を使い、ノート区間のみに適用する
+            #    interpolate_to_frames を使い、ノート区間のみに適用する
             note_frames = e_idx - s_idx
             if note_frames > 0:
                 for seq_id, seq_points in note_info["seqs"].items():
                     if seq_id in note_params_ts and seq_points:
                         # ノート区間だけの密な配列を生成して上書き
-                        interp_vals = self._interpolate_to_frames(
+                        interp_vals = self.interpolate_to_frames(
                             seq_points, tempo_map, resolution,
                             total_frames, default_value=n_params.get(seq_id, 0)
                         )
@@ -165,7 +165,7 @@ class VSQXDNNFormatter(VSQXParser):
             evec_id_ts[s_idx:e_idx] = note_info["evec_id"]
             repeat_ts[s_idx:e_idx] = note_info["repeat"]
 
-        # --- 動的パラメータの補間 (_interpolate_to_frames に統一) ---
+        # --- 動的パラメータの補間 (interpolate_to_frames に統一) ---
         for param_id in self.vsqx_config["DYNAMIC_PARAM_IDS"]:
             if param_id not in dynamic_params_ts:
                 continue  # 配列が確保されていない(使わない)パラメータは補間をスキップ
@@ -178,7 +178,7 @@ class VSQXDNNFormatter(VSQXParser):
                     default_val = 12.0
                 else:
                     default_val = 63.5
-                dynamic_params_ts[param_id] = self._interpolate_to_frames(
+                dynamic_params_ts[param_id] = self.interpolate_to_frames(
                     tick_points, tempo_map, resolution, total_frames, default_val
                 )
 
