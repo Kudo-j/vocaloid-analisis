@@ -152,10 +152,10 @@ def main():
     for data in [vsqx_data_a, vsqx_data_b]:
         data["tempo"] = data["tempo_map"][0][1] if data["tempo_map"] else 120.0
         for note in data["notes"]:
-            note["start_sec"] = reader._tick_to_second(
+            note["start_sec"] = reader.tick_to_second(
                 note["abs_start_tick"], data["tempo_map"], data["resolution"]
             )
-            note["end_sec"] = reader._tick_to_second(
+            note["end_sec"] = reader.tick_to_second(
                 note["abs_end_tick"], data["tempo_map"], data["resolution"]
             )
 

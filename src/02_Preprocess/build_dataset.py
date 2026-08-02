@@ -25,22 +25,6 @@ from feature_extractor import AudioFeatureExtractor
 from vsqx_dnn_formatter import VSQXDNNFormatter
 
 
-def _flatten_input_config(config_item):
-    """
-    リストと文字列が混在する設定(INPUT_VSQX_PARAMS)を
-    フラットな文字列リストに展開する。
-    VSQXExtractor にも同名メソッドがあるが、build_dataset 側でも
-    config 解析のために独立して使用する。
-    """
-    flat_list = []
-    if isinstance(config_item, list):
-        for item in config_item:
-            flat_list.extend(_flatten_input_config(item))
-    else:
-        flat_list.append(config_item)
-    return flat_list
-
-
 def build_dataset(wav_dir, vsqx_dir, output_dir):
     """
     WAV/VSQX ペアを走査し、音響特徴量とVSQXパラメータを抽出して
@@ -64,7 +48,9 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     vsqx_extractor.vsqx_config["TARGET_PARAM_CONFIG"] = config.TARGET_PARAM_CONFIG
 
     # --- config の解析 ---
-    input_param_ids = _flatten_input_config(config.INPUT_VSQX_PARAMS)
+    input_param_ids = []
+    for p_list in config.INPUT_VSQX_PARAMS.values():
+        input_param_ids.extend(p_list)
     target_param_ids = []
     for cat, p_list in config.TARGET_PARAM_CONFIG.items():
         if isinstance(p_list, list):

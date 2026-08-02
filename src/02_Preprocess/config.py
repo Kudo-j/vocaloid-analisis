@@ -5,23 +5,23 @@ HOP_LENGTH = 256
 # =============================================================================
 # ディレクトリ・実行設定 (ユーザー環境に合わせて修正)
 # =============================================================================
-# WAV_DIR = "./data/wav_ALL"
-# VSQX_DIR = "./data/use_vsqx/got/aug"
-# OUTPUT_DIR = "./processed/augDYN_DYN_mel"
+WAV_DIR = "./data/Step1/wav"
+VSQX_DIR = "./data/Step1/vsqx"
+OUTPUT_DIR = "./processed/Step1"
 
-# --- テスト用設定 ---
-WAV_DIR = "../../Testdata"
-VSQX_DIR = "../../Testdata"
-OUTPUT_DIR = "../../Testdata/build_dataset_test_output"
+# # --- テスト用設定 ---
+# WAV_DIR = "../../Testdata"
+# VSQX_DIR = "../../Testdata"
+# OUTPUT_DIR = "../../Testdata/build_dataset_test_output"
 
 
 # 特徴量抽出設定
 # FEATURE_TYPES = ["mfcc","source_rms"]
-FEATURE_TYPES = ["mel"]
-# Target以外の動パラを抽出
-# INPUT_DYNAMIC_IDS = [p for p in DYNAMIC_PARAM_IDS if p != "DYN"]
-INPUT_VSQX_PARAMS = []
-
+FEATURE_TYPES = ["rms"]
+# 入力にするパラメータを辞書で指定（ブランチ分けに対応）
+# 例1（単一結合）: {"all_inputs": ["NOTE_NUM", "PHONEME_P", "DYN", "PIT"]}
+# 例2（ブランチ）: {"branch_basic": ["NOTE_NUM", "PHONEME_P"], "branch_voice": ["DYN", "PIT"]}
+INPUT_VSQX_PARAMS = {}
 
 # # 出力にするものを辞書で指定
 # TARGET_PARAM_CONFIG = {

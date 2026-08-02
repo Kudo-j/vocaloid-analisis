@@ -554,7 +554,9 @@ def predict_vsqx(args):
     norm_vsqx = preprocessor.normalize_features(raw_vsqx)
 
     # C. 特徴量の結合
-    input_param_ids = preprocessor._flatten_input_config(config.INPUT_VSQX_PARAMS)
+    input_param_ids = []
+    for p_list in config.INPUT_VSQX_PARAMS.values():
+        input_param_ids.extend(p_list)
 
     X_list = [audio_features]
 

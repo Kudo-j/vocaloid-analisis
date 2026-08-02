@@ -2,8 +2,9 @@ import numpy as np
 import librosa
 from vsqx_parser import VSQXParser
 
+
 class VSQXDNNFormatter(VSQXParser):
-    def parse_vsqx(self, file_path, total_frames, pre_measure_ticks=1920 * 4):
+    def parse_vsqx(self, file_path, total_frames):
         """
         VSQXファイルからDNN入力用の密なNumPy配列を構築する。
         内部で read_sparse() を呼び出し、疎なデータを配列に変換する。
@@ -11,7 +12,7 @@ class VSQXDNNFormatter(VSQXParser):
         # --- Layer 1 呼び出し: 疎なデータの取得 ---
         sparse_data = self.read_sparse(file_path)
         if sparse_data is None:
-            return None
+            raise ValueError(f"Failed to parse VSQX file: {file_path}")
 
         tempo_map = sparse_data["tempo_map"]
         resolution = sparse_data["resolution"]
@@ -21,9 +22,11 @@ class VSQXDNNFormatter(VSQXParser):
         # --- 利用するパラメータの特定 (オプトイン方式) ---
         has_input = "INPUT_VSQX_PARAMS" in self.vsqx_config
         has_target = "TARGET_PARAM_CONFIG" in self.vsqx_config
-        
+
         if has_input or has_target:
-            input_params = self._flatten_input_config(self.vsqx_config.get("INPUT_VSQX_PARAMS", []))
+            input_params = []
+            for inputs in self.vsqx_config.get("INPUT_VSQX_PARAMS", {}).values():
+                input_params.extend(inputs)
             target_params = []
             for targets in self.vsqx_config.get("TARGET_PARAM_CONFIG", {}).values():
                 target_params.extend(targets)
@@ -31,9 +34,14 @@ class VSQXDNNFormatter(VSQXParser):
             active_params = set(input_params + target_params)
         else:
             # 外部から設定が注入されていない場合は、安全のため従来通り全パラメータを有効化(フォールバック)
-            all_params = (self.vsqx_config.get("DYNAMIC_PARAM_IDS", []) + 
-                          self.vsqx_config.get("NOTE_PARAM_IDS", []) + 
-                          self.vsqx_config.get("STATIC_PARAM_IDS", []))
+            print(
+                "[Warning] VSQX入力/ターゲット設定が見つかりません。安全のため全パラメータをフォールバックします。"
+            )
+            all_params = (
+                self.vsqx_config.get("DYNAMIC_PARAM_IDS", [])
+                + self.vsqx_config.get("NOTE_PARAM_IDS", [])
+                + self.vsqx_config.get("STATIC_PARAM_IDS", [])
+            )
             active_params = set(all_params)
 
         # --- 配列の初期化 ---
@@ -65,16 +73,15 @@ class VSQXDNNFormatter(VSQXParser):
             "DURATION": np.zeros(total_frames, dtype=np.float32),
         }
         phoneme_ts = np.full(total_frames, "unknown", dtype=object)
-        voicing_mask_ts = np.zeros(
-            (total_frames, 1), dtype=np.float32
-        )
+        voicing_mask_ts = np.zeros((total_frames, 1), dtype=np.float32)
         evec_id_ts = np.zeros(total_frames, dtype=np.int32)
         repeat_ts = np.zeros(total_frames, dtype=np.float32)
         static_params_ts = {
             pid: np.full(
                 total_frames, float(static_params.get(pid, 0)), dtype=np.float32
             )
-            for pid in self.vsqx_config["STATIC_PARAM_IDS"] if pid in active_params
+            for pid in self.vsqx_config["STATIC_PARAM_IDS"]
+            if pid in active_params
         }
 
         voice_lib_ts = np.zeros((total_frames, 2), dtype=np.int32)
@@ -96,20 +103,20 @@ class VSQXDNNFormatter(VSQXParser):
             dur_tick = note_info["dur_tick"]
 
             # Tick → 秒 → フレームインデックス変換
-            start_sec = self._tick_to_second(abs_start_tick, tempo_map, resolution)
-            end_sec = self._tick_to_second(abs_end_tick, tempo_map, resolution)
+            start_sec = self.tick_to_second(abs_start_tick, tempo_map, resolution)
+            end_sec = self.tick_to_second(abs_end_tick, tempo_map, resolution)
 
             s_idx = np.clip(
                 librosa.time_to_frames(
                     start_sec, sr=self.sr, hop_length=self.hop_length
                 ),
-                0, total_frames,
+                0,
+                total_frames,
             )
             e_idx = np.clip(
-                librosa.time_to_frames(
-                    end_sec, sr=self.sr, hop_length=self.hop_length
-                ),
-                0, total_frames,
+                librosa.time_to_frames(end_sec, sr=self.sr, hop_length=self.hop_length),
+                0,
+                total_frames,
             )
 
             # 1. スカラーノートパラメータの適用
@@ -126,8 +133,11 @@ class VSQXDNNFormatter(VSQXParser):
                     if seq_id in note_params_ts and seq_points:
                         # ノート区間だけの密な配列を生成して上書き
                         interp_vals = self.interpolate_to_frames(
-                            seq_points, tempo_map, resolution,
-                            total_frames, default_value=n_params.get(seq_id, 0)
+                            seq_points,
+                            tempo_map,
+                            resolution,
+                            total_frames,
+                            default_value=n_params.get(seq_id, 0),
                         )
                         note_params_ts[seq_id][s_idx:e_idx] = interp_vals[s_idx:e_idx]
 
@@ -137,7 +147,7 @@ class VSQXDNNFormatter(VSQXParser):
             if vib_len_val < 100:
                 vib_start_ratio = (100 - vib_len_val) / 100.0
                 vib_start_tick = abs_start_tick + (dur_tick * vib_start_ratio)
-                vib_start_sec = self._tick_to_second(
+                vib_start_sec = self.tick_to_second(
                     vib_start_tick, tempo_map, resolution
                 )
 
@@ -279,18 +289,7 @@ class VSQXDNNFormatter(VSQXParser):
 
         return normalized
 
-    def _flatten_input_config(self, config_item):
-        """
-        リストと文字列が混在する設定(INPUT_VSQX_PARAMS)を
-        フラットな文字列リストに展開する
-        """
-        flat_list = []
-        if isinstance(config_item, list):
-            for item in config_item:
-                flat_list.extend(self._flatten_input_config(item))
-        else:
-            flat_list.append(config_item)
-        return flat_list
+
 
     def _get_feature_data(self, param_id, normalized_data):
         """
@@ -322,4 +321,3 @@ class VSQXDNNFormatter(VSQXParser):
 
         print(f"Warning: Parameter ID '{param_id}' not found in parsed data.")
         return None, 0
-
