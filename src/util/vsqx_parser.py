@@ -479,7 +479,6 @@ class VSQXParser:
     def read_sparse(self, file_path):
         """
         VSQXをパースし、全パラメータを tick 形式の疎な点データ辞書として返す。
-        テンポマップは常にvsPart開始Tick分シフトされ、WAV相対Tickに変換される。
 
         Args:
             file_path: VSQXファイルのパス
