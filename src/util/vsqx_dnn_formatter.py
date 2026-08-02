@@ -23,14 +23,16 @@ class VSQXDNNFormatter(VSQXParser):
         has_input = "INPUT_VSQX_PARAMS" in self.vsqx_config
         has_target = "TARGET_PARAM_CONFIG" in self.vsqx_config
 
+        # 学習に使用するパラメータだけ処理を行うため、入力とターゲットのパラメータを特定する
         if has_input or has_target:
             input_params = []
+            # パラメータは辞書型なのでvalueを取り出し、リストに追加
             for inputs in self.vsqx_config.get("INPUT_VSQX_PARAMS", {}).values():
                 input_params.extend(inputs)
             target_params = []
             for targets in self.vsqx_config.get("TARGET_PARAM_CONFIG", {}).values():
                 target_params.extend(targets)
-            # 実際に使うパラメータの集合 (O(1)で検索できるようにset化)
+            # 実際に使うパラメータの集合 (検索高速化のためset化)
             active_params = set(input_params + target_params)
         else:
             # 外部から設定が注入されていない場合は、安全のため従来通り全パラメータを有効化(フォールバック)
@@ -45,7 +47,7 @@ class VSQXDNNFormatter(VSQXParser):
             active_params = set(all_params)
 
         # --- 配列の初期化 ---
-        # 正規化後に完全に0.0となるような中央値で初期化する
+        # 正規化後にデフォルト値が0.0となるように中央値で初期化する
         dynamic_params_ts = {}
         for pid in self.vsqx_config["DYNAMIC_PARAM_IDS"]:
             if pid not in active_params:
@@ -103,6 +105,7 @@ class VSQXDNNFormatter(VSQXParser):
             dur_tick = note_info["dur_tick"]
 
             # Tick → 秒 → フレームインデックス変換
+            # ここで求めた時間内に値を埋める
             start_sec = self.tick_to_second(abs_start_tick, tempo_map, resolution)
             end_sec = self.tick_to_second(abs_end_tick, tempo_map, resolution)
 
@@ -119,7 +122,8 @@ class VSQXDNNFormatter(VSQXParser):
                 total_frames,
             )
 
-            # 1. スカラーノートパラメータの適用
+            # 1. スカラーノートパラメータ（Velocity, Accentなど）の入力
+            #    固定値でノート区間を埋める
             n_params = note_info["params"]
             for pid, val in n_params.items():
                 if pid in note_params_ts:
@@ -175,7 +179,7 @@ class VSQXDNNFormatter(VSQXParser):
             evec_id_ts[s_idx:e_idx] = note_info["evec_id"]
             repeat_ts[s_idx:e_idx] = note_info["repeat"]
 
-        # --- 動的パラメータの補間 (interpolate_to_frames に統一) ---
+        # --- 動的パラメータの補間 ---
         for param_id in self.vsqx_config["DYNAMIC_PARAM_IDS"]:
             if param_id not in dynamic_params_ts:
                 continue  # 配列が確保されていない(使わない)パラメータは補間をスキップ
@@ -208,14 +212,15 @@ class VSQXDNNFormatter(VSQXParser):
         """
         parse_vsqxで得られた生データを、モデル入力用に正規化・One-hot化する。
         推論時にもこのメソッドを通すことで学習時と同じ尺度を保証する。
+        戻り値は、configで指定される名前（"PIT", "PHONEME_P"など）をキーとした
+        フラットな辞書（Flat Dictionary）を返す。
         """
         if raw_data is None:
             return None
 
-        normalized = {}
+        flat_normalized = {}
 
         # 1. Dynamic
-        norm_dyn = {}
         for pid, val in raw_data["dynamic"].items():
             if pid == "PIT":
                 norm_val = (val / 8192.0)[:, np.newaxis]
@@ -223,11 +228,9 @@ class VSQXDNNFormatter(VSQXParser):
                 norm_val = ((val / 24.0) * 2.0 - 1.0)[:, np.newaxis]
             else:
                 norm_val = ((val / 127.0) * 2.0 - 1.0)[:, np.newaxis]
-            norm_dyn[pid] = norm_val
-        normalized["dynamic"] = norm_dyn
+            flat_normalized[pid] = norm_val
 
         # 2. Note
-        norm_note = {}
         for pid, val in raw_data["note"].items():
             if pid == "vibType":
                 idx = np.clip(val.astype(int) - 1, 0, 15)
@@ -238,32 +241,26 @@ class VSQXDNNFormatter(VSQXParser):
                     norm_val = (val / max_v)[:, np.newaxis]
                 else:
                     norm_val = ((val / max_v) * 2.0 - 1.0)[:, np.newaxis]
-            norm_note[pid] = norm_val
-        normalized["note"] = norm_note
+            flat_normalized[pid] = norm_val
 
         # 3. Melody
-        norm_melody = {}
         for pid, val in raw_data["melody"].items():
             max_v = self.vsqx_config["NOTE_PARAM_MAX_VALUES"].get(pid, 1.0)
             if pid == "NOTE_NUMBER":
                 norm_val = ((val / max_v) * 2.0 - 1.0)[:, np.newaxis]
             else:
                 norm_val = (val / max_v)[:, np.newaxis]
-            norm_melody[pid] = norm_val
-        normalized["melody"] = norm_melody
+            flat_normalized[pid] = norm_val
 
         # 4. Static
-        norm_static = {}
         for pid, val in raw_data["static"].items():
             norm_val = (val / 127.0)[:, np.newaxis]
-            norm_static[pid] = norm_val
-        normalized["static"] = norm_static
+            flat_normalized[pid] = norm_val
 
         # 5. Voice Lib (Already numeric, just ensure float32)
-        normalized["voice_lib"] = raw_data["voice_lib"].astype(np.float32)
+        flat_normalized["VOICE_LIB"] = raw_data["voice_lib"].astype(np.float32)
 
         # 6. Phoneme One-hot
-        # ▼▼▼ 変更: 音素マップが存在する場合のみOne-hot化を実行 ▼▼▼
         if self.num_phoneme_classes > 0:
             ph_indices = np.array(
                 [
@@ -272,52 +269,20 @@ class VSQXDNNFormatter(VSQXParser):
                 ],
                 dtype=int,
             )
-            normalized["phoneme"] = np.eye(self.num_phoneme_classes, dtype=np.float32)[
+            flat_normalized["PHONEME_P"] = np.eye(self.num_phoneme_classes, dtype=np.float32)[
                 ph_indices
             ]
 
         # 7. EVEC One-hot
         evec_indices = np.clip(raw_data["evec_id"], 0, self.num_evec_classes - 1)
-        normalized["evec"] = np.eye(self.num_evec_classes, dtype=np.float32)[
+        flat_normalized["EVEC"] = np.eye(self.num_evec_classes, dtype=np.float32)[
             evec_indices
         ]
 
         # 8. Repeat Count
-        normalized["repeat"] = raw_data["repeat"][:, np.newaxis].astype(np.float32)
-        # ★追加: 発声マスクをそのまま引き継ぐ
-        normalized["voicing_mask"] = raw_data["voicing_mask"]
+        flat_normalized["REPEAT"] = raw_data["repeat"][:, np.newaxis].astype(np.float32)
 
-        return normalized
+        # 9. Voicing Mask（そのまま）
+        flat_normalized["voicing_mask"] = raw_data["voicing_mask"]
 
-
-
-    def _get_feature_data(self, param_id, normalized_data):
-        """
-        ID文字列(例: "PHONEME_P")を受け取り、
-        正規化済みの実データ(例: normalized_data["phoneme"])とその次元数を返す。
-        カテゴリを横断して検索を行う。
-        """
-        # 1. 特殊マッピング (ID名 != 内部キー名 の場合)
-        if param_id == "PHONEME_P":
-            return normalized_data["phoneme"], self.num_phoneme_classes
-        if param_id == "EVEC":
-            return normalized_data["evec"], self.num_evec_classes
-        if param_id == "REPEAT":
-            return normalized_data["repeat"], 1
-
-        # 2. カテゴリ内検索 (ID名 == 内部キー名 の場合)
-        # 検索対象のカテゴリカテゴリ
-        categories = ["dynamic", "note", "melody", "static"]
-
-        for cat in categories:
-            if cat in normalized_data and param_id in normalized_data[cat]:
-                data = normalized_data[cat][param_id]
-                return data, data.shape[1]
-
-        # 3. その他 (Voice Libなど)
-        # 必要に応じてマッピングを追加
-        if param_id == "VOICE_LIB":  # もしconfigで定義があれば
-            return normalized_data["voice_lib"], 2
-
-        print(f"Warning: Parameter ID '{param_id}' not found in parsed data.")
-        return None, 0
+        return flat_normalized

@@ -131,10 +131,10 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     # メタデータ構造体の初期化
     # =====================================================================
     feature_info = {
-        "num_x_features": 0,
-        "num_y_features": 0,
-        "x_feature_map": [],
-        "y_feature_map": [],
+        "x_dims": {},
+        "y_dims": {},
+        "x_feature_map": {},
+        "y_feature_map": {},
         "phoneme_map": vsqx_extractor.phoneme_map,
         "num_phoneme_classes": vsqx_extractor.num_phoneme_classes,
         "num_evec_classes": vsqx_extractor.num_evec_classes,
@@ -192,59 +192,90 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
                 continue
             norm_vsqx = vsqx_extractor.normalize_features(raw_vsqx)
 
-            # --- Concatenate Features ---
-            X_list = [audio_features]
+            # --- Organize Features by Branch ---
+            x_dict = {"audio": audio_features.astype(np.float32)}
+            y_dict = {}
+
             if is_first:
-                feature_info["x_feature_map"].append(
+                feature_info["x_feature_map"]["audio"] = [
                     {"name": "Audio_Features", "dim": audio_features.shape[1]}
-                )
+                ]
+                feature_info["x_dims"]["audio"] = audio_features.shape[1]
 
-            for pid in input_param_ids:
-                data, dim = vsqx_extractor._get_feature_data(pid, norm_vsqx)
-                if data is not None:
-                    X_list.append(data)
+            # X (入力パラメータ) の処理
+            for branch_name, p_list in config.INPUT_VSQX_PARAMS.items():
+                branch_data_list = []
+                if is_first:
+                    feature_info["x_feature_map"][branch_name] = []
+                    
+                for pid in p_list:
+                    if pid not in norm_vsqx:
+                        raise ValueError(f"Required input parameter '{pid}' not found in VSQX.")
+                    data = norm_vsqx[pid]
+                    dim = data.shape[1]
+                    branch_data_list.append(data)
                     if is_first:
-                        feature_info["x_feature_map"].append(
-                            {"name": pid, "dim": dim}
-                        )
+                        feature_info["x_feature_map"][branch_name].append({"name": pid, "dim": dim})
+                
+                if branch_data_list:
+                    branch_arr = np.concatenate(branch_data_list, axis=-1).astype(np.float32)
+                else:
+                    branch_arr = np.empty((total_frames, 0), dtype=np.float32)
+                
+                x_dict[branch_name] = branch_arr
+                if is_first:
+                    feature_info["x_dims"][branch_name] = branch_arr.shape[1]
 
-            Y_list = []
-            for pid in target_param_ids:
-                data, dim = vsqx_extractor._get_feature_data(pid, norm_vsqx)
-                if data is not None:
-                    Y_list.append(data)
+            # Y (ターゲットパラメータ) の処理
+            for branch_name, p_list in config.TARGET_PARAM_CONFIG.items():
+                branch_data_list = []
+                if is_first:
+                    feature_info["y_feature_map"][branch_name] = []
+                    
+                for pid in p_list:
+                    if pid not in norm_vsqx:
+                        raise ValueError(f"Required target parameter '{pid}' not found in VSQX.")
+                    data = norm_vsqx[pid]
+                    dim = data.shape[1]
+                    branch_data_list.append(data)
                     if is_first:
-                        feature_info["y_feature_map"].append(
-                            {"name": pid, "dim": dim}
-                        )
-
-            X_arr = np.concatenate(X_list, axis=-1).astype(np.float32)
-            Y_arr = (
-                np.concatenate(Y_list, axis=-1).astype(np.float32)
-                if Y_list
-                else np.empty((total_frames, 0), dtype=np.float32)
-            )
-            X_final, Y_final = X_arr, Y_arr
+                        feature_info["y_feature_map"][branch_name].append({"name": pid, "dim": dim})
+                
+                if branch_data_list:
+                    branch_arr = np.concatenate(branch_data_list, axis=-1).astype(np.float32)
+                else:
+                    branch_arr = np.empty((total_frames, 0), dtype=np.float32)
+                
+                y_dict[branch_name] = branch_arr
+                if is_first:
+                    feature_info["y_dims"][branch_name] = branch_arr.shape[1]
 
             if is_first:
-                feature_info["num_x_features"] = X_final.shape[1]
-                feature_info["num_y_features"] = Y_final.shape[1]
                 is_first = False
 
             voicing_mask_data = norm_vsqx["voicing_mask"]
 
+            # NPZへの保存引数を準備
+            save_kwargs = {
+                "voicing_mask": voicing_mask_data,
+                "audio_env": audio_env_raw,
+            }
+            # Xの各ブランチを "x_branchName" のキーで保存
+            for k, v in x_dict.items():
+                save_kwargs[f"x_{k}"] = v
+            # Yの各ブランチを "y_branchName" のキーで保存
+            for k, v in y_dict.items():
+                save_kwargs[f"y_{k}"] = v
+
             np.savez_compressed(
                 os.path.join(output_dir, f"{name_stem}.npz"),
-                x=X_final,
-                y=Y_final,
-                voicing_mask=voicing_mask_data,
-                audio_env=audio_env_raw,
+                **save_kwargs
             )
-            feature_info["file_lengths"][name_stem] = X_final.shape[0]
-            print(f"Saved: {name_stem} ({X_final.shape})")
+            feature_info["file_lengths"][name_stem] = total_frames
+            print(f"Saved: {name_stem} (Frames: {total_frames})")
 
             # メモリを解放
-            del audio_features, raw_vsqx, norm_vsqx, X_arr, Y_arr, X_final, Y_final
+            del audio_features, raw_vsqx, norm_vsqx, x_dict, y_dict, save_kwargs
             gc.collect()
 
         except Exception as e:

@@ -569,11 +569,10 @@ def predict_vsqx(args):
     X_list = [audio_features]
 
     for pid in input_param_ids:
-        data, _ = preprocessor._get_feature_data(pid, norm_vsqx)
-        if data is not None:
-            X_list.append(data)
-        else:
-            print(f"Warning: Input parameter '{pid}' not found in VSQX.")
+        if pid not in norm_vsqx:
+            raise ValueError(f"Required input parameter '{pid}' not found in VSQX.")
+        data = norm_vsqx[pid]
+        X_list.append(data)
 
     X_input = np.concatenate(X_list, axis=-1).astype(np.float32)
 
@@ -665,7 +664,7 @@ def predict_vsqx(args):
             # parse_vsqx + normalize_features は既に実行済み (norm_vsqx)
             # ターゲットパラメータの正解値を抽出
             for pid in predictions.keys():
-                gt_data, _ = preprocessor._get_feature_data(pid, norm_vsqx)
+                gt_data = norm_vsqx.get(pid)
                 if gt_data is not None:
                     if gt_data.ndim == 2 and gt_data.shape[1] == 1:
                         gt_data = gt_data.flatten()
