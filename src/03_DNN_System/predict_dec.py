@@ -562,7 +562,8 @@ def predict_vsqx(args):
 
     for pid in input_param_ids:
         if pid not in norm_vsqx:
-            raise ValueError(f"Required input parameter '{pid}' not found in VSQX.")
+            print(f"\n【致命的なエラー】設定ミス: 推論に必要な入力パラメータ '{pid}' が見つかりません。config.py の記述を確認してください。")
+            sys.exit(1)
         data = norm_vsqx[pid]
         X_list.append(data)
 

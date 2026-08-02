@@ -25,6 +25,10 @@ from feature_extractor import AudioFeatureExtractor
 from vsqx_dnn_formatter import VSQXDNNFormatter
 
 
+class ConfigParameterError(Exception):
+    pass
+
+
 def build_dataset(wav_dir, vsqx_dir, output_dir):
     """
     WAV/VSQX ペアを走査し、音響特徴量とVSQXパラメータを抽出して
@@ -210,7 +214,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
                     
                 for pid in p_list:
                     if pid not in norm_vsqx:
-                        raise ValueError(f"Required input parameter '{pid}' not found in VSQX.")
+                        raise ConfigParameterError(f"設定ミス: 学習に必要な入力パラメータ '{pid}' が見つかりません。config.py の記述を確認してください。")
                     data = norm_vsqx[pid]
                     dim = data.shape[1]
                     branch_data_list.append(data)
@@ -234,7 +238,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
                     
                 for pid in p_list:
                     if pid not in norm_vsqx:
-                        raise ValueError(f"Required target parameter '{pid}' not found in VSQX.")
+                        raise ConfigParameterError(f"設定ミス: 学習に必要なターゲットパラメータ '{pid}' が見つかりません。config.py の記述を確認してください。")
                     data = norm_vsqx[pid]
                     dim = data.shape[1]
                     branch_data_list.append(data)
@@ -278,6 +282,11 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             del audio_features, raw_vsqx, norm_vsqx, x_dict, y_dict, save_kwargs
             gc.collect()
 
+        except ConfigParameterError as e:
+            # 設定ミスの場合は、即座にプログラム全体を停止する
+            print(f"\n【致命的なエラー】{e}")
+            print("全ファイルの処理を中断します。")
+            sys.exit(1)
         except Exception as e:
             print(f"Skipped: {name_stem} ({type(e).__name__}: {e})")
             skipped_files.append({
