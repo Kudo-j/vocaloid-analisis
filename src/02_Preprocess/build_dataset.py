@@ -14,7 +14,6 @@ import json
 import numpy as np
 import librosa
 import gc
-import traceback
 
 # --- パス設定 ---
 # util フォルダをインポートパスに追加
@@ -43,10 +42,13 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     """
     os.makedirs(output_dir, exist_ok=True)
 
+    # スキップされたファイルとその理由を記録するリスト (エラーログ用)
+    skipped_files = []
+
     # --- Extractor の初期化 ---
     audio_extractor = AudioFeatureExtractor(sr=config.SR, hop_length=config.HOP_LENGTH)
     vsqx_extractor = VSQXDNNFormatter(sr=config.SR, hop_length=config.HOP_LENGTH)
-    
+
     # 高速化のため、実際に使用するパラメータ設定をパーサーに注入（オプトイン）
     vsqx_extractor.vsqx_config["INPUT_VSQX_PARAMS"] = config.INPUT_VSQX_PARAMS
     vsqx_extractor.vsqx_config["TARGET_PARAM_CONFIG"] = config.TARGET_PARAM_CONFIG
@@ -63,28 +65,71 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             target_param_ids.append(p_list)
 
     # 音素("PHONEME_P")が入力・出力のいずれかに含まれているかチェック
-    use_phoneme = ("PHONEME_P" in input_param_ids) or (
-        "PHONEME_P" in target_param_ids
-    )
+    use_phoneme = ("PHONEME_P" in input_param_ids) or ("PHONEME_P" in target_param_ids)
 
+    # ある場合、全曲で音素次元数を一致させるためにスキャンを行う
     if use_phoneme:
         vsqx_extractor.scan_all_phonemes(vsqx_dir)
     else:
         print("Skipping phoneme scan (PHONEME_P not found in config).")
 
     # --- WAV/VSQX ペアの収集 ---
-    wav_files = {
-        os.path.splitext(f)[0]: os.path.join(r, f)
-        for r, _, fs in os.walk(wav_dir)
-        for f in fs
-        if f.endswith(".wav")
-    }
-    vsqx_files = {
-        os.path.splitext(f)[0]: os.path.join(r, f)
-        for r, _, fs in os.walk(vsqx_dir)
-        for f in fs
-        if f.endswith(".vsqx")
-    }
+    from collections import defaultdict
+
+    wav_paths_dict = defaultdict(list)
+    vsqx_paths_dict = defaultdict(list)
+
+    for r, _, fs in os.walk(wav_dir):
+        for f in fs:
+            if f.endswith(".wav"):
+                stem = os.path.splitext(f)[0]
+                wav_paths_dict[stem].append(os.path.join(r, f))
+
+    for r, _, fs in os.walk(vsqx_dir):
+        for f in fs:
+            if f.endswith(".vsqx"):
+                stem = os.path.splitext(f)[0]
+                vsqx_paths_dict[stem].append(os.path.join(r, f))
+
+    wav_files = {}
+    vsqx_files = {}
+
+    # 重複チェックとログ登録
+    for stem, paths in wav_paths_dict.items():
+        if len(paths) > 1:
+            print(f"Warning: Skipping duplicate WAV file: {stem}")
+            skipped_files.append(
+                {
+                    "file": stem,
+                    "error_type": "DuplicateFileError",
+                    "message": f"同名のWAVファイルが複数存在します:\n"
+                    + "\n".join([f"      - {p}" for p in paths]),
+                }
+            )
+        else:
+            wav_files[stem] = paths[0]
+
+    for stem, paths in vsqx_paths_dict.items():
+        if len(paths) > 1:
+            print(f"Warning: Skipping duplicate VSQX file: {stem}")
+            if stem not in [
+                s["file"] for s in skipped_files
+            ]:  # すでにWAV側でスキップ済みでなければ追加
+                skipped_files.append(
+                    {
+                        "file": stem,
+                        "error_type": "DuplicateFileError",
+                        "message": f"同名のVSQXファイルが複数存在します:\n"
+                        + "\n".join([f"      - {p}" for p in paths]),
+                    }
+                )
+        else:
+            vsqx_files[stem] = paths[0]
+
+    # スキップされたものは辞書から削除（ペア成立を阻止）
+    for skipped in skipped_files:
+        wav_files.pop(skipped["file"], None)
+        vsqx_files.pop(skipped["file"], None)
 
     file_pairs = sorted(
         [(k, wav_files[k], vsqx_files[k]) for k in wav_files if k in vsqx_files]
@@ -101,7 +146,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
 
     for idx, (name_stem, wav_path, _) in enumerate(file_pairs):
         try:
-            # 特徴量抽出（正規化なし）
+            # 特徴量抽出
             features = audio_extractor.get_features(wav_path, config.FEATURE_TYPES)
 
             if sum_x is None:
@@ -150,14 +195,10 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
         "hop_length": config.HOP_LENGTH,
         # 統計データ (JSON保存用にリスト変換)
         "audio_global_mean": (
-            global_mean.tolist()
-            if isinstance(global_mean, np.ndarray)
-            else global_mean
+            global_mean.tolist() if isinstance(global_mean, np.ndarray) else global_mean
         ),
         "audio_global_std": (
-            global_std.tolist()
-            if isinstance(global_std, np.ndarray)
-            else global_std
+            global_std.tolist() if isinstance(global_std, np.ndarray) else global_std
         ),
     }
     is_first = True
@@ -165,7 +206,6 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     # =====================================================================
     # 第2パス: データセット生成と保存
     # =====================================================================
-    skipped_files = []  # スキップされたファイルとその理由を記録するリスト
 
     for name_stem, wav_path, vsqx_path in file_pairs:
         try:
@@ -177,9 +217,9 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             # check_timelag.py で特徴量の種類に依存せず確実に同期チェックできるよう、
             # 常に純粋なRMS（音量エンベロープ）を計算して保存する
             y_raw = audio_extractor._load_audio(wav_path)
-            audio_env_raw = librosa.feature.rms(
-                y=y_raw, hop_length=config.HOP_LENGTH
-            )[0]
+            audio_env_raw = librosa.feature.rms(y=y_raw, hop_length=config.HOP_LENGTH)[
+                0
+            ]
             audio_env_raw = audio_env_raw[
                 : audio_features.shape[0]
             ]  # フレーム長を合わせる
@@ -193,7 +233,9 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             # --- VSQX Processing ---
             raw_vsqx = vsqx_extractor.parse_vsqx(vsqx_path, total_frames)
             if raw_vsqx is None:
-                continue
+                raise ValueError(
+                    "VSQXのパースに失敗しました（ファイルが空、またはボーカルトラックが存在しません）"
+                )
             norm_vsqx = vsqx_extractor.normalize_features(raw_vsqx)
 
             # --- Organize Features by Branch ---
@@ -211,21 +253,27 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
                 branch_data_list = []
                 if is_first:
                     feature_info["x_feature_map"][branch_name] = []
-                    
+
                 for pid in p_list:
                     if pid not in norm_vsqx:
-                        raise ConfigParameterError(f"設定ミス: 学習に必要な入力パラメータ '{pid}' が見つかりません。config.py の記述を確認してください。")
+                        raise ConfigParameterError(
+                            f"設定ミス: 学習に必要な入力パラメータ '{pid}' が見つかりません。config.py の記述を確認してください。"
+                        )
                     data = norm_vsqx[pid]
                     dim = data.shape[1]
                     branch_data_list.append(data)
                     if is_first:
-                        feature_info["x_feature_map"][branch_name].append({"name": pid, "dim": dim})
-                
+                        feature_info["x_feature_map"][branch_name].append(
+                            {"name": pid, "dim": dim}
+                        )
+
                 if branch_data_list:
-                    branch_arr = np.concatenate(branch_data_list, axis=-1).astype(np.float32)
+                    branch_arr = np.concatenate(branch_data_list, axis=-1).astype(
+                        np.float32
+                    )
                 else:
                     branch_arr = np.empty((total_frames, 0), dtype=np.float32)
-                
+
                 x_dict[branch_name] = branch_arr
                 if is_first:
                     feature_info["x_dims"][branch_name] = branch_arr.shape[1]
@@ -235,21 +283,27 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
                 branch_data_list = []
                 if is_first:
                     feature_info["y_feature_map"][branch_name] = []
-                    
+
                 for pid in p_list:
                     if pid not in norm_vsqx:
-                        raise ConfigParameterError(f"設定ミス: 学習に必要なターゲットパラメータ '{pid}' が見つかりません。config.py の記述を確認してください。")
+                        raise ConfigParameterError(
+                            f"設定ミス: 学習に必要なターゲットパラメータ '{pid}' が見つかりません。config.py の記述を確認してください。"
+                        )
                     data = norm_vsqx[pid]
                     dim = data.shape[1]
                     branch_data_list.append(data)
                     if is_first:
-                        feature_info["y_feature_map"][branch_name].append({"name": pid, "dim": dim})
-                
+                        feature_info["y_feature_map"][branch_name].append(
+                            {"name": pid, "dim": dim}
+                        )
+
                 if branch_data_list:
-                    branch_arr = np.concatenate(branch_data_list, axis=-1).astype(np.float32)
+                    branch_arr = np.concatenate(branch_data_list, axis=-1).astype(
+                        np.float32
+                    )
                 else:
                     branch_arr = np.empty((total_frames, 0), dtype=np.float32)
-                
+
                 y_dict[branch_name] = branch_arr
                 if is_first:
                     feature_info["y_dims"][branch_name] = branch_arr.shape[1]
@@ -272,8 +326,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
                 save_kwargs[f"y_{k}"] = v
 
             np.savez_compressed(
-                os.path.join(output_dir, f"{name_stem}.npz"),
-                **save_kwargs
+                os.path.join(output_dir, f"{name_stem}.npz"), **save_kwargs
             )
             feature_info["file_lengths"][name_stem] = total_frames
             print(f"Saved: {name_stem} (Frames: {total_frames})")
@@ -289,23 +342,25 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             sys.exit(1)
         except Exception as e:
             print(f"Skipped: {name_stem} ({type(e).__name__}: {e})")
-            skipped_files.append({
-                "file": name_stem,
-                "error_type": type(e).__name__,
-                "message": str(e),
-            })
+            skipped_files.append(
+                {
+                    "file": name_stem,
+                    "error_type": type(e).__name__,
+                    "message": str(e),
+                }
+            )
 
     # --- メタデータの保存 ---
-    with open(
-        os.path.join(output_dir, "features.json"), "w", encoding="utf-8"
-    ) as f:
+    with open(os.path.join(output_dir, "features.json"), "w", encoding="utf-8") as f:
         json.dump(feature_info, f, indent=4, ensure_ascii=False)
 
     # --- スキップレポートの出力 ---
     num_success = len(file_pairs) - len(skipped_files)
-    print(f"\nDataset generation completed. "
-          f"Success: {num_success}/{len(file_pairs)}, "
-          f"Skipped: {len(skipped_files)}/{len(file_pairs)}")
+    print(
+        f"\nDataset generation completed. "
+        f"Success: {num_success}/{len(file_pairs)}, "
+        f"Skipped: {len(skipped_files)}/{len(file_pairs)}"
+    )
 
     if skipped_files:
         report_path = os.path.join(output_dir, "skipped_report.txt")

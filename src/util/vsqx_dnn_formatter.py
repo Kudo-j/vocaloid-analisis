@@ -216,7 +216,7 @@ class VSQXDNNFormatter(VSQXParser):
         フラットな辞書（Flat Dictionary）を返す。
         """
         if raw_data is None:
-            return None
+            raise ValueError("raw_data is None. Cannot normalize empty VSQX data.")
 
         flat_normalized = {}
 
