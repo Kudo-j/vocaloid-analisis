@@ -148,16 +148,18 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
         try:
             frames_in_file = 0
             for branch_name, features_list in config.INPUT_AUDIO_PARAMS.items():
+                if not features_list:
+                    continue
                 features = audio_extractor.get_features(wav_path, features_list)
-                if sum_x_dict[branch_name] is None:
+                if sum_x_dict.get(branch_name) is None:
                     dim = features.shape[1]
                     sum_x_dict[branch_name] = np.zeros(dim, dtype=np.float64)
                     sum_sq_x_dict[branch_name] = np.zeros(dim, dtype=np.float64)
-                
+
                 sum_x_dict[branch_name] += np.sum(features, axis=0)
                 sum_sq_x_dict[branch_name] += np.sum(features**2, axis=0)
                 frames_in_file = features.shape[0]
-                
+
             total_frames_all += frames_in_file
 
             if (idx + 1) % 100 == 0:
@@ -168,7 +170,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     # 平均・標準偏差の算出
     audio_global_mean = {}
     audio_global_std = {}
-    
+
     if total_frames_all > 0:
         for branch_name in config.INPUT_AUDIO_PARAMS:
             mean = sum_x_dict[branch_name] / total_frames_all
@@ -211,6 +213,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             for k, v in audio_global_std.items()
         },
     }
+    # 最初の処理用変数　次元数記述等で使用
     is_first = True
 
     # =====================================================================
@@ -222,32 +225,36 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             # --- Audio Processing ---
             x_dict = {}
             total_frames = 0
-            
+
             # check_timelag.py 用に純粋なRMSを別途計算
             y_raw = audio_extractor._load_audio(wav_path)
-            audio_env_raw = librosa.feature.rms(
-                y=y_raw, hop_length=config.HOP_LENGTH
-            )[0]
+            audio_env_raw = librosa.feature.rms(y=y_raw, hop_length=config.HOP_LENGTH)[
+                0
+            ]
 
             # 音響特徴量をブランチごとに抽出・正規化
             for branch_name, features_list in config.INPUT_AUDIO_PARAMS.items():
+                if not features_list:
+                    continue
                 features = audio_extractor.get_features(wav_path, features_list)
-                total_frames = features.shape[0] # 全ブランチで同一フレーム数と仮定
-                
+                total_frames = features.shape[0]  # 全ブランチで同一フレーム数と仮定
+
                 # ブランチ固有の統計量で正規化
                 mean = audio_global_mean[branch_name]
                 std = audio_global_std[branch_name]
                 features = (features - mean) / (std + 1e-7)
+                # NaNエラー対策
                 features = np.nan_to_num(features)
-                
+
                 x_dict[branch_name] = features.astype(np.float32)
-                
+
                 if is_first:
-                    # x_feature_map 登録
+                    #  各音響特徴の名前と次元数を登録
                     feature_info["x_feature_map"][branch_name] = [
                         {"name": f, "dim": audio_extractor.get_feature_dim(f)}
                         for f in features_list
                     ]
+                    # ブランチごとの合計次元数を登録
                     feature_info["x_dims"][branch_name] = features.shape[1]
 
             audio_env_raw = audio_env_raw[:total_frames]  # フレーム長を合わせる
@@ -265,6 +272,8 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
 
             # X (入力パラメータ) の処理
             for branch_name, p_list in config.INPUT_VSQX_PARAMS.items():
+                if not p_list:
+                    continue
                 branch_data_list = []
                 if is_first:
                     feature_info["x_feature_map"][branch_name] = []
@@ -282,12 +291,9 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
                             {"name": pid, "dim": dim}
                         )
 
-                if branch_data_list:
-                    branch_arr = np.concatenate(branch_data_list, axis=-1).astype(
-                        np.float32
-                    )
-                else:
-                    branch_arr = np.empty((total_frames, 0), dtype=np.float32)
+                branch_arr = np.concatenate(branch_data_list, axis=-1).astype(
+                    np.float32
+                )
 
                 x_dict[branch_name] = branch_arr
                 if is_first:
@@ -295,6 +301,10 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
 
             # Y (ターゲットパラメータ) の処理
             for branch_name, p_list in config.TARGET_PARAM_CONFIG.items():
+                if not p_list:
+                    raise ConfigParameterError(
+                        f"設定ミス: ターゲットパラメータが空です。予測する対象が存在しません。"
+                    )
                 branch_data_list = []
                 if is_first:
                     feature_info["y_feature_map"][branch_name] = []
@@ -312,12 +322,9 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
                             {"name": pid, "dim": dim}
                         )
 
-                if branch_data_list:
-                    branch_arr = np.concatenate(branch_data_list, axis=-1).astype(
-                        np.float32
-                    )
-                else:
-                    branch_arr = np.empty((total_frames, 0), dtype=np.float32)
+                branch_arr = np.concatenate(branch_data_list, axis=-1).astype(
+                    np.float32
+                )
 
                 y_dict[branch_name] = branch_arr
                 if is_first:
