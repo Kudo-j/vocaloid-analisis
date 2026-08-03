@@ -140,23 +140,25 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     # 第1パス: 全体統計量の計算 (Global Mean / Std for Z-score Normalization)
     # =====================================================================
     print("Calculating global statistics for audio features...")
-    sum_x = None
-    sum_sq_x = None
+    sum_x_dict = {branch: None for branch in config.INPUT_AUDIO_PARAMS}
+    sum_sq_x_dict = {branch: None for branch in config.INPUT_AUDIO_PARAMS}
     total_frames_all = 0
 
     for idx, (name_stem, wav_path, _) in enumerate(file_pairs):
         try:
-            # 特徴量抽出
-            features = audio_extractor.get_features(wav_path, config.FEATURE_TYPES)
-
-            if sum_x is None:
-                dim = features.shape[1]
-                sum_x = np.zeros(dim, dtype=np.float64)
-                sum_sq_x = np.zeros(dim, dtype=np.float64)
-
-            sum_x += np.sum(features, axis=0)
-            sum_sq_x += np.sum(features**2, axis=0)
-            total_frames_all += features.shape[0]
+            frames_in_file = 0
+            for branch_name, features_list in config.INPUT_AUDIO_PARAMS.items():
+                features = audio_extractor.get_features(wav_path, features_list)
+                if sum_x_dict[branch_name] is None:
+                    dim = features.shape[1]
+                    sum_x_dict[branch_name] = np.zeros(dim, dtype=np.float64)
+                    sum_sq_x_dict[branch_name] = np.zeros(dim, dtype=np.float64)
+                
+                sum_x_dict[branch_name] += np.sum(features, axis=0)
+                sum_sq_x_dict[branch_name] += np.sum(features**2, axis=0)
+                frames_in_file = features.shape[0]
+                
+            total_frames_all += frames_in_file
 
             if (idx + 1) % 100 == 0:
                 print(f"Stats scanning: {idx + 1}/{len(file_pairs)}")
@@ -164,15 +166,21 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             print(f"Error reading {name_stem} for stats: {e}")
 
     # 平均・標準偏差の算出
+    audio_global_mean = {}
+    audio_global_std = {}
+    
     if total_frames_all > 0:
-        global_mean = sum_x / total_frames_all
-        global_var = (sum_sq_x / total_frames_all) - (global_mean**2)
-        # 負の値によるエラー防止とゼロ除算防止
-        global_std = np.sqrt(np.maximum(global_var, 1e-7))
+        for branch_name in config.INPUT_AUDIO_PARAMS:
+            mean = sum_x_dict[branch_name] / total_frames_all
+            var = (sum_sq_x_dict[branch_name] / total_frames_all) - (mean**2)
+            std = np.sqrt(np.maximum(var, 1e-7))
+            audio_global_mean[branch_name] = mean
+            audio_global_std[branch_name] = std
     else:
         print("Warning: No valid audio frames found. Using default normalization.")
-        global_mean = 0.0
-        global_std = 1.0
+        for branch_name in config.INPUT_AUDIO_PARAMS:
+            audio_global_mean[branch_name] = 0.0
+            audio_global_std[branch_name] = 1.0
 
     print("Global statistics calculated.")
 
@@ -193,13 +201,15 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
         "target_vsqx_params": target_param_ids,
         "sr": config.SR,
         "hop_length": config.HOP_LENGTH,
-        # 統計データ (JSON保存用にリスト変換)
-        "audio_global_mean": (
-            global_mean.tolist() if isinstance(global_mean, np.ndarray) else global_mean
-        ),
-        "audio_global_std": (
-            global_std.tolist() if isinstance(global_std, np.ndarray) else global_std
-        ),
+        # 統計データ (JSON保存用に辞書内のNumPy配列をリスト変換)
+        "audio_global_mean": {
+            k: (v.tolist() if isinstance(v, np.ndarray) else v)
+            for k, v in audio_global_mean.items()
+        },
+        "audio_global_std": {
+            k: (v.tolist() if isinstance(v, np.ndarray) else v)
+            for k, v in audio_global_std.items()
+        },
     }
     is_first = True
 
@@ -210,25 +220,37 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     for name_stem, wav_path, vsqx_path in file_pairs:
         try:
             # --- Audio Processing ---
-            audio_features = audio_extractor.get_features(
-                wav_path, config.FEATURE_TYPES
-            )
-
-            # check_timelag.py で特徴量の種類に依存せず確実に同期チェックできるよう、
-            # 常に純粋なRMS（音量エンベロープ）を計算して保存する
+            x_dict = {}
+            total_frames = 0
+            
+            # check_timelag.py 用に純粋なRMSを別途計算
             y_raw = audio_extractor._load_audio(wav_path)
-            audio_env_raw = librosa.feature.rms(y=y_raw, hop_length=config.HOP_LENGTH)[
-                0
-            ]
-            audio_env_raw = audio_env_raw[
-                : audio_features.shape[0]
-            ]  # フレーム長を合わせる
+            audio_env_raw = librosa.feature.rms(
+                y=y_raw, hop_length=config.HOP_LENGTH
+            )[0]
 
-            # Global Normalization (ファイル単体ではなく全体統計を使用)
-            audio_features = (audio_features - global_mean) / (global_std + 1e-7)
-            audio_features = np.nan_to_num(audio_features)
+            # 音響特徴量をブランチごとに抽出・正規化
+            for branch_name, features_list in config.INPUT_AUDIO_PARAMS.items():
+                features = audio_extractor.get_features(wav_path, features_list)
+                total_frames = features.shape[0] # 全ブランチで同一フレーム数と仮定
+                
+                # ブランチ固有の統計量で正規化
+                mean = audio_global_mean[branch_name]
+                std = audio_global_std[branch_name]
+                features = (features - mean) / (std + 1e-7)
+                features = np.nan_to_num(features)
+                
+                x_dict[branch_name] = features.astype(np.float32)
+                
+                if is_first:
+                    # x_feature_map 登録
+                    feature_info["x_feature_map"][branch_name] = [
+                        {"name": f, "dim": audio_extractor.get_feature_dim(f)}
+                        for f in features_list
+                    ]
+                    feature_info["x_dims"][branch_name] = features.shape[1]
 
-            total_frames = audio_features.shape[0]
+            audio_env_raw = audio_env_raw[:total_frames]  # フレーム長を合わせる
 
             # --- VSQX Processing ---
             raw_vsqx = vsqx_extractor.parse_vsqx(vsqx_path, total_frames)
@@ -239,14 +261,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             norm_vsqx = vsqx_extractor.normalize_features(raw_vsqx)
 
             # --- Organize Features by Branch ---
-            x_dict = {"audio": audio_features.astype(np.float32)}
             y_dict = {}
-
-            if is_first:
-                feature_info["x_feature_map"]["audio"] = [
-                    {"name": "Audio_Features", "dim": audio_features.shape[1]}
-                ]
-                feature_info["x_dims"]["audio"] = audio_features.shape[1]
 
             # X (入力パラメータ) の処理
             for branch_name, p_list in config.INPUT_VSQX_PARAMS.items():
@@ -332,7 +347,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             print(f"Saved: {name_stem} (Frames: {total_frames})")
 
             # メモリを解放
-            del audio_features, raw_vsqx, norm_vsqx, x_dict, y_dict, save_kwargs
+            del raw_vsqx, norm_vsqx, x_dict, y_dict, save_kwargs
             gc.collect()
 
         except ConfigParameterError as e:
