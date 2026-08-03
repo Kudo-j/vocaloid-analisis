@@ -347,9 +347,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
             for k, v in y_dict.items():
                 save_kwargs[f"y_{k}"] = v
 
-            np.savez_compressed(
-                os.path.join(output_dir, f"{name_stem}.npz"), **save_kwargs
-            )
+            np.savez(os.path.join(output_dir, f"{name_stem}.npz"), **save_kwargs)
             feature_info["file_lengths"][name_stem] = total_frames
             print(f"Saved: {name_stem} (Frames: {total_frames})")
 
