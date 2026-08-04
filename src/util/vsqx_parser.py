@@ -517,6 +517,9 @@ class VSQXParser:
                 pre_measure = int(pre_measure_elem.text)
         pre_measure_ticks = 1920 * pre_measure
 
+        # テンポマップもPreMeasure分だけシフトする
+        tempo_map = self._shift_tempo_map(tempo_map, pre_measure_ticks)
+
         # --- 3. Static Params & Voice Library ---
         static_params = {}
         voice_libraries = {"1st_vocal": None, "2nd_vocal": None}
@@ -580,7 +583,9 @@ class VSQXParser:
                 tag_id = v_elem.get("id")
                 param_id = self.vsqx_config["ID_MAPPING"].get(tag_id)
                 if param_id:
-                    abs_tick = int(t_cc.text)
+                    # WAVファイルはPreMeasure以降から書き出されている前提（トラック書き出し）
+                    abs_tick = part_start_tick + int(t_cc.text) - pre_measure_ticks
+                    abs_tick = max(0, abs_tick)
                     all_dynamic_data[param_id].append(
                         {"tick": abs_tick, "value": int(v_elem.text)}
                     )
@@ -594,7 +599,9 @@ class VSQXParser:
                 rel_start_tick = int(note_t.text)
                 dur_tick = int(note_dur.text)
 
-                abs_start_tick = rel_start_tick
+                # 絶対Tick = パート開始位置 + 音符位置 - プレメジャー(WAV書き出し時にカットされる分)
+                abs_start_tick = part_start_tick + rel_start_tick - pre_measure_ticks
+                abs_start_tick = max(0, abs_start_tick)
                 abs_end_tick = abs_start_tick + dur_tick
 
                 # スカラーノートパラメータ（デフォルト値で初期化）
