@@ -18,14 +18,15 @@ OUTPUT_DIR = "../../Testdata/build_dataset_test_output"
 # 入力にする音響特徴量を辞書で指定（マルチブランチ対応）
 INPUT_AUDIO_PARAMS = {
     "audio_rms": ["rms"],
-    # "audio_mel": ["mel"] # 追加する場合はこのように書く
+    # "audio_mel": ["mel"] # 追加する場合はこのように書く。["mel", "rms"]のように複数を同一ブランチで処理も可能
 }
 
 # 互換性のためフラットなリストも自動生成
 FEATURE_TYPES = [f for features in INPUT_AUDIO_PARAMS.values() for f in features]
 # 入力にするパラメータを辞書で指定（ブランチ分けに対応）
 # 例1（単一結合）: {"all_inputs": ["NOTE_NUM", "PHONEME_P", "DYN", "PIT"]}
-# 例2（ブランチ）: {"branch_basic": ["NOTE_NUM", "PHONEME_P"], "branch_voice": ["DYN", "PIT"]}
+# 例2（ブランチ）: {"branch_basic": ["NOTE_NUM", "PHONEME_P"],
+#                  "branch_voice": ["DYN", "PIT"]}
 INPUT_VSQX_PARAMS = {}
 
 # # 出力にするものを辞書で指定
