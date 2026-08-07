@@ -132,13 +132,13 @@ class VocalDataset(Dataset):
                 self.chunk_map.append((name_stem, -1, total_frames))
 
         # --- Evalモード ---
-        else:
+        elif self.mode == "eval" or self.mode == "eval_full":
             start = 0
             while start < total_frames:
                 end = start + CHUNK_SIZE
                 if end > total_frames:
                     break
-                if not _is_silence_chunk(voicing_mask[start:end]):
+                if self.mode == "eval_full" or not _is_silence_chunk(voicing_mask[start:end]):
                     self.chunk_map.append((name_stem, start, end))
                 if end == total_frames:
                     break
@@ -250,7 +250,7 @@ def _count_valid_chunks_in_file(filepath):
     return valid_count
 
 
-def create_datasets(data_dir, songlist_path, valid_ratio=0.10, test_ratio=0.10):
+def create_datasets(data_dir, songlist_path, valid_ratio=0.10, test_ratio=0.10, split_mode="random"):
     """
     1. 特徴量ロード
     2. 全ファイルスキャン & 有効チャンク数カウント (無音除去)
@@ -270,13 +270,18 @@ def create_datasets(data_dir, songlist_path, valid_ratio=0.10, test_ratio=0.10):
         [f.replace(".npz", "") for f in os.listdir(data_dir) if f.endswith(".npz")]
     )
 
-    song_names = []
-    if os.path.exists(songlist_path):
-        with open(songlist_path, "r", encoding="utf-8") as f:
-            raw_names = [line.strip() for line in f if line.strip()]
-            song_names = sorted(list(set(raw_names)), key=len, reverse=True)
+    if split_mode == "random":
+        song_names = all_files  # 各ファイルを1つの独立したグループとして扱う
     else:
-        print("Warning: Songlist not found. All files -> Train.")
+        if songlist_path and os.path.exists(songlist_path):
+            with open(songlist_path, "r", encoding="utf-8") as f:
+                raw_names = [line.strip() for line in f if line.strip()]
+                song_names = sorted(list(set(raw_names)), key=len, reverse=True)
+        else:
+            # 曲名リストがない場合は、ファイル名の最初の '_' の前までを自動的に曲名とみなす
+            raw_names = [f.split("_")[0] for f in all_files]
+            song_names = sorted(list(set(raw_names)), key=len, reverse=True)
+            print("Warning: Songlist not found. Grouping files by prefix for splitting.")
 
     # --- スキャンとカウント ---
     print("Scanning files for valid chunks (removing silence)...")
