@@ -38,6 +38,6 @@ checkpoints/
 
 # その他
 Testdata/
-src/05_Step_Experiments/output_linear/
+src/05_Step_Experiments/output
 *.json
 *.csv
