@@ -54,25 +54,24 @@ DNN用の処理などは他のモジュールが行う
     *   **パラメータ差分検出**:
         `find_changed_params()` や `find_static_param_diffs()` により、2つのVSQX間でどの動的・静的パラメータに差分（ユーザーの手による編集など）が発生しているかを特定する。
 
-## 使い方・呼び出し例
+### 5. `plot_util`
+学習の経過（Loss履歴）を可視化するための共通ユーティリティディレクトリ。
 
-これらは単独で実行するスクリプトではなく、他のスクリプトからインポートして使用する。
+*   **主なファイルと機能**:
+    *   **`plot.py`**:
+        `save_loss_plot()` により、学習時および検証時の Total, MSE, Diff Loss の推移を対数グラフ (Log Scale) でプロットする。ベストエポック時の詳細なLoss値や、使用したハイパーパラメータ群の情報をグラフ外側に配置して一枚の画像として保存するため、実験結果の比較・記録に役立つ。
 
-```python
-import sys
-sys.path.append("./util")
-from feature_extractor import AudioFeatureExtractor
-from vsqx_dnn_formatter import VSQXDNNFormatter
+### 6. `train_util`
+モデル（DNNや線形回帰など）の学習・評価を回すための共通コンポーネント群を格納するディレクトリ。
+アーキテクチャに依存しない汎用的な処理（データローダー、損失関数、評価器など）をまとめている。
 
-# 初期化 (サンプリングレートとホップ長を統一する)
-sr = 44100
-hop_length = 256
-
-audio_ext = AudioFeatureExtractor(sr=sr, hop_length=hop_length)
-vsqx_ext = VSQXDNNFormatter(sr=sr, hop_length=hop_length)
-
-# 特徴量の抽出
-audio_features = audio_ext.get_features("sample.wav", ["mel", "f0_world"])
-vsqx_data_raw = vsqx_ext.parse_vsqx("sample.vsqx", total_frames=audio_features.shape[0])
-vsqx_data_norm = vsqx_ext.normalize_features(vsqx_data_raw) # フラットな辞書で返却される
-```
+*   **主なファイルと機能**:
+    *   **`dataset.py`**:
+        辞書型NPZ形式に対応したDatasetクラス（`VocalDataset`）を提供する。チャンク分割や無音区間の除去、楽曲単位（songlistが必要）でのTrain/Valid/Testの自動分割ロジックも内包している。
+    *   **`evaluate.py`**:
+        DNNモデルであっても線形モデルであっても使用するために、推論結果のプロットのみを行う共通の評価クラス（`Evaluator`）を提供する。推論自体はモデルごとに異なるため、モデルごとに推論用のプログラムを作成して、その出力をこのEvaluatorに入力する。
+        入力された推論結果に対して、逆正規化、無声区間をマスクした誤差（MAE等）の計算、時系列波形グラフや散布図の生成、さらに結果のExcelレポート出力機能を担う。
+    *   **`losses.py`**:
+        パディング部分や無音区間のマスク処理、および時間方向の変化量を考慮した微分損失（Diff Loss）を取り入れた独自の損失関数（`AdvancedLoss`）を提供する。
+    *   **`early_stopping.py`**:
+        検証Lossを監視し、改善が見られない場合に学習を早期終了（Early Stopping）させる仕組みを提供する。主にOptunaで使用する。
