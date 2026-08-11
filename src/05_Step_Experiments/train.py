@@ -474,6 +474,7 @@ def evaluate_model(custom_config=None, model_load_path=None):
     OUTPUT_BASE_DIR = config.get("OUTPUT_BASE_DIR", "output")
     EXPERIMENT_NAME = config["EXPERIMENT_NAME"]
     SONGLIST_PATH = config["SONGLIST_PATH"]
+    PLOT_EXTRA_FEATURES = config.get("PLOT_EXTRA_FEATURES", {})
     SPLIT_MODE = config["SPLIT_MODE"]
     MODEL_TYPE = config["MODEL_TYPE"]
     FUSION_STRATEGY = config["FUSION_STRATEGY"]
@@ -562,6 +563,7 @@ def evaluate_model(custom_config=None, model_load_path=None):
         all_y_true = []
         all_y_pred = []
         all_v_mask = []
+        all_extra_features = {feat_name: [] for feat_name in PLOT_EXTRA_FEATURES.values()}
 
         with torch.no_grad():
             for batch in dl:
@@ -586,10 +588,23 @@ def evaluate_model(custom_config=None, model_load_path=None):
                     all_y_pred.append(y_pred_seq.cpu().numpy())
                     all_v_mask.append(v_mask_seq.cpu().numpy())
 
+                    for k, feat_name in PLOT_EXTRA_FEATURES.items():
+                        if k in x_dict:
+                            feat_arr = x_dict[k][b_idx, :seq_len]
+                            if feat_arr.dim() > 1:
+                                feat_arr = feat_arr[:, 0]
+                            all_extra_features[feat_name].append(feat_arr.cpu().numpy())
+
         if len(all_y_true) > 0:
             y_true_np = np.concatenate(all_y_true, axis=0)
             y_pred_np = np.concatenate(all_y_pred, axis=0)
             v_mask_np = np.concatenate(all_v_mask, axis=0)
+
+            extra_features_np = {}
+            for feat_name, arr_list in all_extra_features.items():
+                if len(arr_list) > 0:
+                    extra_features_np[feat_name] = np.concatenate(arr_list, axis=0)
+
             evaluator.add_song_result(
                 song_name,
                 y_true_np,
@@ -607,6 +622,7 @@ def evaluate_model(custom_config=None, model_load_path=None):
                     wave_path,
                     y_param_names,
                     voicing_mask=v_mask_np,
+                    extra_features=extra_features_np,
                 )
 
     evaluator.plot_scatter(TEST_EVAL_DIR, EXPERIMENT_NAME, y_param_names)

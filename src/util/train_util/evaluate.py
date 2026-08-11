@@ -156,6 +156,7 @@ class Evaluator:
         save_path,
         param_names=None,
         voicing_mask=None,
+        extra_features=None,
         sr=44100,
         hop_length=256,
     ):
@@ -171,18 +172,23 @@ class Evaluator:
                 y_true = y_true[start_idx:]
                 y_pred = y_pred[start_idx:]
                 voicing_mask = voicing_mask[start_idx:]
+                if extra_features is not None:
+                    for k in extra_features.keys():
+                        extra_features[k] = extra_features[k][start_idx:]
         else:
             voicing_mask = np.ones(y_true.shape[0], dtype=np.float32)
 
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         num_dims = y_true.shape[1]
+        num_extra = len(extra_features) if extra_features else 0
+        num_plots = num_dims + num_extra
 
         # 時間軸 (秒) の計算
         # librosa.frames_to_time を使わず直接計算してlibrosa依存を避ける
         time_axis = np.arange(y_true.shape[0]) * hop_length / sr
 
-        fig, axes = plt.subplots(num_dims, 1, figsize=(12, 3.5 * num_dims), sharex=True)
-        if num_dims == 1:
+        fig, axes = plt.subplots(num_plots, 1, figsize=(12, 3.5 * num_plots), sharex=True)
+        if num_plots == 1:
             axes = [axes]
 
         for i in range(num_dims):
@@ -232,6 +238,27 @@ class Evaluator:
 
             ax.legend(loc="upper right")
             ax.grid(True, alpha=0.3)
+
+        # --- 追加特徴量 (RMSなど) のプロット ---
+        if extra_features:
+            for idx, (feat_name, feat_data) in enumerate(extra_features.items()):
+                ax = axes[num_dims + idx]
+                
+                # 無音区間のグレー背景
+                self._shade_unvoiced(ax, time_axis, voicing_mask)
+                
+                ax.plot(
+                    time_axis,
+                    feat_data,
+                    label=feat_name,
+                    color="forestgreen",
+                    linewidth=1.5,
+                )
+                
+                ax.set_title(f"入力特徴量 (Input Feature): {feat_name}")
+                ax.set_ylabel("Value")
+                ax.legend(loc="upper right")
+                ax.grid(True, alpha=0.3)
 
         axes[-1].set_xlabel("Time (s)")
         plt.tight_layout()
