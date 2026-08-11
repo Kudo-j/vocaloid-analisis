@@ -103,8 +103,8 @@ class Evaluator:
         lengths = torch.tensor([t_y_true.size(1)], dtype=torch.long).to(self.device)
 
         with torch.no_grad():
-            # MSE と Diff Loss を共通関数で計算 (voicing_maskを渡して無音を無視)
-            total_loss, mse_val, diff_val = self.loss_fn(
+            # MSE と各サブメトリクスを共通関数で計算 (voicing_maskを渡して無音を無視)
+            total_loss, metrics = self.loss_fn(
                 t_y_pred, t_y_true, lengths, voicing_mask=t_v_mask
             )
 
@@ -118,8 +118,8 @@ class Evaluator:
         res_dict = {
             "Song Name": song_name,
             "Total Loss": total_loss.item(),
-            "MSE Loss": mse_val,
-            "Diff Loss": diff_val,
+            "MSE Loss": metrics.get("mse", 0.0),
+            "Diff Loss": metrics.get("diff", 0.0),
             "Valid Frames": int(voicing_mask.sum()),
         }
 

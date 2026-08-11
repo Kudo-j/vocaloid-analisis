@@ -3,8 +3,11 @@ losses.py
 =========
 学習で使用するカスタム損失関数とマスク生成の共通ユーティリティ。
 
-train_encoder.py の AdvancedLoss クラスと create_mask 関数を移植したもの。
-各Stepの学習スクリプトから呼び出して使用する。
+全てのLossクラスは統一インターフェースに従う:
+    forward(pred, target, lengths, voicing_mask)
+        -> (total_loss: Tensor, metrics: dict[str, float])
+
+metrics辞書のキーは自由に定義可能で、train.pyとplot.pyが動的に処理する。
 """
 
 import torch
@@ -26,6 +29,50 @@ def create_mask(lengths, max_len):
     return mask
 
 
+def _build_final_mask(target, lengths, voicing_mask):
+    """
+    パディングマスクと無音マスクを合成した最終マスクを生成する共通処理。
+
+    Args:
+        target: (B, S, D) のターゲットテンソル。
+        lengths: (B,) の各サンプルの実際のフレーム数。
+        voicing_mask: (B, S, 1) の無音マスク。Noneの場合はパディングのみ考慮。
+
+    Returns:
+        final_mask: (B, S, 1) のfloatテンソル。
+    """
+    max_len = target.size(1)
+    mask_len = create_mask(lengths, max_len).unsqueeze(-1).float()  # (B, S, 1)
+
+    if voicing_mask is not None:
+        final_mask = mask_len * voicing_mask
+    else:
+        final_mask = mask_len
+
+    return final_mask
+
+
+class MaskedMSELoss(nn.Module):
+    """
+    マスク付きMSE損失関数。
+
+    パディング部分と無音部分をマスクで除外した純粋なMSEのみを計算する。
+    基礎的な実験や、Loss関数の影響を排除したい比較実験で使用する。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.mse = nn.MSELoss(reduction="none")
+
+    def forward(self, pred, target, lengths, voicing_mask):
+        final_mask = _build_final_mask(target, lengths, voicing_mask)
+
+        loss_mse_element = self.mse(pred, target)
+        loss_mse = (loss_mse_element * final_mask).sum() / (final_mask.sum() + 1e-9)
+
+        return loss_mse, {"mse": loss_mse.item()}
+
+
 class AdvancedLoss(nn.Module):
     """
     高機能損失関数 (Masked MSE + Derivative Loss)。
@@ -39,21 +86,13 @@ class AdvancedLoss(nn.Module):
         self.mse = nn.MSELoss(reduction="none")
 
     def forward(self, pred, target, lengths, voicing_mask):
-        # --- 1. マスク作成 (パディング & 無音) ---
-        max_len = target.size(1)
-        mask_len = create_mask(lengths, max_len).unsqueeze(-1).float()  # (B, S, 1)
+        final_mask = _build_final_mask(target, lengths, voicing_mask)
 
-        # voicing_mask が存在する場合は乗算して無音部分も除外
-        if voicing_mask is not None:
-            final_mask = mask_len * voicing_mask
-        else:
-            final_mask = mask_len
-
-        # --- 2. 通常のMSE Loss ---
+        # --- 通常のMSE Loss ---
         loss_mse_element = self.mse(pred, target)
         loss_mse = (loss_mse_element * final_mask).sum() / (final_mask.sum() + 1e-9)
 
-        # --- 3. 微分Loss ---
+        # --- 微分Loss ---
         pred_diff = pred[:, 1:, :] - pred[:, :-1, :]
         target_diff = target[:, 1:, :] - target[:, :-1, :]
         mask_diff = final_mask[:, 1:, :] * final_mask[:, :-1, :]
@@ -67,4 +106,32 @@ class AdvancedLoss(nn.Module):
 
         total_loss = loss_mse + loss_diff
 
-        return total_loss, loss_mse.item(), loss_diff.item()
+        return total_loss, {"mse": loss_mse.item(), "diff": loss_diff.item()}
+
+
+# --- Lossクラスのレジストリ ---
+LOSS_REGISTRY = {
+    "mse": MaskedMSELoss,
+    "advanced": AdvancedLoss,
+}
+
+
+def build_loss(loss_type):
+    """
+    文字列からLossクラスのインスタンスを生成するファクトリ関数。
+
+    Args:
+        loss_type: "mse" または "advanced"。
+
+    Returns:
+        nn.Module: Lossクラスのインスタンス。
+
+    Raises:
+        ValueError: 未知のloss_typeが指定された場合。
+    """
+    if loss_type not in LOSS_REGISTRY:
+        available = ", ".join(LOSS_REGISTRY.keys())
+        raise ValueError(
+            f"未知のLoss種別: '{loss_type}' (選択肢: {available})"
+        )
+    return LOSS_REGISTRY[loss_type]()
