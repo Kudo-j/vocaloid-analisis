@@ -56,22 +56,30 @@ def save_loss_plot(
     # train_metrics_historyのキー一覧を取得（例: ["mse", "diff"]）
     sub_keys = sorted(train_metrics_history.keys())
 
+    is_single_metric = len(sub_keys) == 1
+
     for idx, key in enumerate(sub_keys):
-        style = _SUB_STYLES[idx % len(_SUB_STYLES)]
-        t_color = _TRAIN_COLORS[idx % len(_TRAIN_COLORS)]
-        v_color = _VAL_COLORS[idx % len(_VAL_COLORS)]
+        if is_single_metric:
+            # サブメトリクスが1つの場合（Total非表示時）、主役として実線・濃い色で描画
+            style = {"linestyle": "-", "alpha": 0.8, "linewidth": 2.0}
+            t_color = "blue"
+            v_color = "orange"
+        else:
+            # 複数ある場合はTotal（実線）の邪魔にならないよう点線・破線で描画
+            style = _SUB_STYLES[idx % len(_SUB_STYLES)]
+            style["linewidth"] = 1.5
+            t_color = _TRAIN_COLORS[idx % len(_TRAIN_COLORS)]
+            v_color = _VAL_COLORS[idx % len(_VAL_COLORS)]
 
         plt.plot(
             train_metrics_history[key],
             label=f"Train {key.upper()}",
-            linewidth=1.5,
             color=t_color,
             **style,
         )
         plt.plot(
             val_metrics_history[key],
             label=f"Val {key.upper()}",
-            linewidth=1.5,
             color=v_color,
             **style,
         )
