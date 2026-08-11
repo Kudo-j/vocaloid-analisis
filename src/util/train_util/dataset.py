@@ -270,7 +270,7 @@ def create_datasets(data_dir, songlist_path, valid_ratio=0.10, test_ratio=0.10, 
         [f.replace(".npz", "") for f in os.listdir(data_dir) if f.endswith(".npz")]
     )
 
-    if split_mode == "random":
+    if split_mode in ["random", "fixed_name"]:
         song_names = all_files  # 各ファイルを1つの独立したグループとして扱う
     else:
         if songlist_path and os.path.exists(songlist_path):
@@ -326,40 +326,70 @@ def create_datasets(data_dir, songlist_path, valid_ratio=0.10, test_ratio=0.10, 
     print(f"\nTotal Valid Chunks: {total_valid_chunks}")
 
     # --- 分割ロジック ---
-    random.seed(42)
-    keys = sorted(list(song_groups.keys()))
-    random.shuffle(keys)
-
-    target_test = int(total_valid_chunks * test_ratio)
-    target_valid = int(total_valid_chunks * valid_ratio)
-
-    current_test = 0
-    current_valid = 0
-
     train_files, valid_files, test_files = [], [], []
     split_log = {"Train": [], "Valid": [], "Test": []}
 
-    for song in keys:
-        data = song_groups[song]
-        files = data["files"]
-        chunks = data["chunks"]
+    if split_mode == "fixed_name":
+        # ファイル名に含まれるキーワードで強制振り分け
+        for song in sorted(list(song_groups.keys())):
+            data = song_groups[song]
+            files = data["files"]
+            chunks = data["chunks"]
 
-        if song == "__Unmatched__":
-            train_files.extend(files)
-            split_log["Train"].append((song, files, chunks))
-            continue
+            if song == "__Unmatched__":
+                train_files.extend(files)
+                split_log["Train"].append((song, files, chunks))
+                continue
 
-        if target_test > 0 and current_test < target_test:
-            test_files.extend(files)
-            current_test += chunks
-            split_log["Test"].append((song, files, chunks))
-        elif target_valid > 0 and current_valid < target_valid:
-            valid_files.extend(files)
-            current_valid += chunks
-            split_log["Valid"].append((song, files, chunks))
-        else:
-            train_files.extend(files)
-            split_log["Train"].append((song, files, chunks))
+            f_lower = song.lower()
+            if "test" in f_lower:
+                test_files.extend(files)
+                split_log["Test"].append((song, files, chunks))
+            elif "valid" in f_lower:
+                valid_files.extend(files)
+                split_log["Valid"].append((song, files, chunks))
+            elif "train" in f_lower:
+                train_files.extend(files)
+                split_log["Train"].append((song, files, chunks))
+            else:
+                train_files.extend(files)
+                split_log["Train"].append((song, files, chunks))
+                print(f"Warning: File '{song}' has no train/valid/test keyword. Assigned to Train.")
+                
+        target_test = sum([e[2] for e in split_log["Test"]])
+        target_valid = sum([e[2] for e in split_log["Valid"]])
+    else:
+        random.seed(42)
+        keys = sorted(list(song_groups.keys()))
+        random.shuffle(keys)
+
+        target_test = int(total_valid_chunks * test_ratio)
+        target_valid = int(total_valid_chunks * valid_ratio)
+
+        current_test = 0
+        current_valid = 0
+
+        for song in keys:
+            data = song_groups[song]
+            files = data["files"]
+            chunks = data["chunks"]
+
+            if song == "__Unmatched__":
+                train_files.extend(files)
+                split_log["Train"].append((song, files, chunks))
+                continue
+
+            if target_test > 0 and current_test < target_test:
+                test_files.extend(files)
+                current_test += chunks
+                split_log["Test"].append((song, files, chunks))
+            elif target_valid > 0 and current_valid < target_valid:
+                valid_files.extend(files)
+                current_valid += chunks
+                split_log["Valid"].append((song, files, chunks))
+            else:
+                train_files.extend(files)
+                split_log["Train"].append((song, files, chunks))
 
     # --- ログ出力 (名前順ソート + Unmatched最後) ---
     log_path = os.path.join(data_dir, "dataset_split_log.txt")
