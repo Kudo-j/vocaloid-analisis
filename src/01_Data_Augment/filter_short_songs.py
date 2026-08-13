@@ -47,7 +47,7 @@ class ValidDurationAnalyzer:
         self.results = []
         self.skipped_files = []  # スキップされたファイルとその理由を記録
         # VSQXCompareの初期化 (サンプリングレートは計算用に適当に設定)
-        self.reader = VSQXCompare(sr=44100, hop_length=512)
+        self.reader = VSQXCompare(sr=44100, shift_length=512)
 
     def _setup_directories(self):
         if os.path.exists(self.output_dir):

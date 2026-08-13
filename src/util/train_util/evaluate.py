@@ -158,7 +158,7 @@ class Evaluator:
         voicing_mask=None,
         extra_features=None,
         sr=44100,
-        hop_length=256,
+        shift_length=512,
     ):
         """
         時系列波形をプロットして保存する。
@@ -185,9 +185,11 @@ class Evaluator:
 
         # 時間軸 (秒) の計算
         # librosa.frames_to_time を使わず直接計算してlibrosa依存を避ける
-        time_axis = np.arange(y_true.shape[0]) * hop_length / sr
+        time_axis = np.arange(y_true.shape[0]) * shift_length / sr
 
-        fig, axes = plt.subplots(num_plots, 1, figsize=(12, 3.5 * num_plots), sharex=True)
+        fig, axes = plt.subplots(
+            num_plots, 1, figsize=(12, 3.5 * num_plots), sharex=True
+        )
         if num_plots == 1:
             axes = [axes]
 
@@ -243,10 +245,10 @@ class Evaluator:
         if extra_features:
             for idx, (feat_name, feat_data) in enumerate(extra_features.items()):
                 ax = axes[num_dims + idx]
-                
+
                 # 無音区間のグレー背景
                 self._shade_unvoiced(ax, time_axis, voicing_mask)
-                
+
                 ax.plot(
                     time_axis,
                     feat_data,
@@ -254,7 +256,7 @@ class Evaluator:
                     color="forestgreen",
                     linewidth=1.5,
                 )
-                
+
                 ax.set_title(f"入力特徴量 (Input Feature): {feat_name}")
                 ax.set_ylabel("Value")
                 ax.legend(loc="upper right")

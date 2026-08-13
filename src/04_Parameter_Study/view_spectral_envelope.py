@@ -57,7 +57,7 @@ OUTPUT_FILENAME = f"spectral_envelope_log_{DATA_NAME}.png"
 
 # 音声設定
 SR = 44100
-HOP_LENGTH = 256
+SHIFT_LENGTH = 256
 
 # プロット設定
 DPI = 300
@@ -96,7 +96,7 @@ UNIFY_DIFF_YLIM = True
 # =============================================================================
 
 
-def extract_spectral_envelope(wav_path, sr, hop_length, method="CheapTrick"):
+def extract_spectral_envelope(wav_path, sr, shift_length, method="CheapTrick"):
     """
     指定された手法でスペクトル包絡を抽出する。
 
@@ -109,7 +109,7 @@ def extract_spectral_envelope(wav_path, sr, hop_length, method="CheapTrick"):
     y = y.astype(np.float64)
     y = np.ascontiguousarray(y)
 
-    frame_period = hop_length / sr * 1000
+    frame_period = shift_length / sr * 1000
 
     # 粗い基本周波数の推定
     _f0, t = pw.dio(y, sr, frame_period=frame_period, f0_floor=65.0, f0_ceil=2093.0)
@@ -122,7 +122,7 @@ def extract_spectral_envelope(wav_path, sr, hop_length, method="CheapTrick"):
         return sp, freqs, f0
     elif method == "LPC":
         n_fft = 2048
-        frames = librosa.util.frame(y, frame_length=n_fft, hop_length=hop_length).T
+        frames = librosa.util.frame(y, frame_length=n_fft, hop_length=shift_length).T
         window = scipy.signal.windows.hann(n_fft)
         frames_win = frames * window
 
@@ -185,7 +185,7 @@ def main():
         print(f"Processing: {label} ({path})")
         # スペクトル包絡抽出（上記extract_spectral_envelope関数で実行）
         sp, f, f0 = extract_spectral_envelope(
-            path, SR, HOP_LENGTH, method=ANALYSIS_METHOD
+            path, SR, SHIFT_LENGTH, method=ANALYSIS_METHOD
         )
         # 有声区間の平均包絡を算出（上記get_voiced_mean_envelope関数で実行）
         mean_env = get_voiced_mean_envelope(sp, f0)

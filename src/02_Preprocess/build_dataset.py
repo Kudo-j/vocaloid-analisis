@@ -46,14 +46,18 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     skipped_files = []
 
     # --- Extractor の初期化 ---
-    audio_extractor = AudioFeatureExtractor(sr=config.SR, hop_length=config.HOP_LENGTH)
-    vsqx_extractor = VSQXDNNFormatter(sr=config.SR, hop_length=config.HOP_LENGTH)
+    audio_extractor = AudioFeatureExtractor(sr=config.SR, shift_length=config.SHIFT_LENGTH)
+    vsqx_extractor = VSQXDNNFormatter(sr=config.SR, shift_length=config.SHIFT_LENGTH)
 
     # 高速化のため、実際に使用するパラメータ設定をパーサーに注入（オプトイン）
     vsqx_extractor.vsqx_config["INPUT_VSQX_PARAMS"] = config.INPUT_VSQX_PARAMS
     vsqx_extractor.vsqx_config["TARGET_PARAM_CONFIG"] = config.TARGET_PARAM_CONFIG
 
     # --- config の解析 ---
+    audio_param_ids = []
+    for p_list in config.INPUT_AUDIO_PARAMS.values():
+        audio_param_ids.extend(p_list)
+
     input_param_ids = []
     for p_list in config.INPUT_VSQX_PARAMS.values():
         input_param_ids.extend(p_list)
@@ -198,11 +202,11 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
         "num_phoneme_classes": vsqx_extractor.num_phoneme_classes,
         "num_evec_classes": vsqx_extractor.num_evec_classes,
         "file_lengths": {},
-        "feature_types": config.FEATURE_TYPES,
+        "feature_types": audio_param_ids,
         "input_vsqx_params": input_param_ids,
         "target_vsqx_params": target_param_ids,
         "sr": config.SR,
-        "hop_length": config.HOP_LENGTH,
+        "shift_length": config.SHIFT_LENGTH,
         # 統計データ (JSON保存用に辞書内のNumPy配列をリスト変換)
         "audio_global_mean": {
             k: (v.tolist() if isinstance(v, np.ndarray) else v)
@@ -228,7 +232,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
 
             # check_timelag.py 用に純粋なRMSを別途計算
             y_raw = audio_extractor._load_audio(wav_path)
-            audio_env_raw = librosa.feature.rms(y=y_raw, hop_length=config.HOP_LENGTH)[
+            audio_env_raw = librosa.feature.rms(y=y_raw, hop_length=config.SHIFT_LENGTH)[
                 0
             ]
 

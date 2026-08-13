@@ -249,7 +249,7 @@ def train_model(custom_config=None, is_tuning=False):
     train_loss_history = []
     val_loss_history = []
     train_metrics_history = {}  # {"mse": [...], "diff": [...], ...}
-    val_metrics_history = {}    # 同上
+    val_metrics_history = {}  # 同上
 
     hyperparams = {
         "MODEL": MODEL_TYPE,
@@ -294,9 +294,7 @@ def train_model(custom_config=None, is_tuning=False):
 
                 with autocast(enabled=(device_type == "cuda")):
                     output = model(x_dict_device)
-                    loss, metrics = criterion(
-                        output, y_batch, len_batch, mask_batch
-                    )
+                    loss, metrics = criterion(output, y_batch, len_batch, mask_batch)
 
                 for mk, mv in metrics.items():
                     train_metrics_total[mk] = train_metrics_total.get(mk, 0) + mv
@@ -316,7 +314,9 @@ def train_model(custom_config=None, is_tuning=False):
 
                     current_loss = loss.item() * ACCUM_STEPS
                     if len(metrics) > 1:
-                        metrics_str = ", ".join(f"{k}:{v:.6f}" for k, v in metrics.items())
+                        metrics_str = ", ".join(
+                            f"{k}:{v:.6f}" for k, v in metrics.items()
+                        )
                         log_msg = (
                             f"Epoch {epoch}/{EPOCHS} | Step {i+1}/{train_batches} | "
                             f"Loss: {current_loss:.6f} ({metrics_str})"
@@ -326,14 +326,16 @@ def train_model(custom_config=None, is_tuning=False):
                             f"Epoch {epoch}/{EPOCHS} | Step {i+1}/{train_batches} | "
                             f"Loss: {current_loss:.6f}"
                         )
-                    
+
                     with open(os.path.join(EXPERIMENT_DIR, "status.txt"), "w") as f:
                         f.write(log_msg + "\n")
 
                 train_loss_total += loss.item() * ACCUM_STEPS
 
             avg_train_loss = train_loss_total / train_batches
-            avg_train_metrics = {k: v / train_batches for k, v in train_metrics_total.items()}
+            avg_train_metrics = {
+                k: v / train_batches for k, v in train_metrics_total.items()
+            }
 
             # === 検証モード ===
             model.eval()
@@ -351,15 +353,15 @@ def train_model(custom_config=None, is_tuning=False):
                     len_batch = len_batch.to(device)
 
                     output = model(x_dict_device)
-                    loss, metrics = criterion(
-                        output, y_batch, len_batch, mask_batch
-                    )
+                    loss, metrics = criterion(output, y_batch, len_batch, mask_batch)
                     val_loss_total += loss.item()
                     for mk, mv in metrics.items():
                         val_metrics_total[mk] = val_metrics_total.get(mk, 0) + mv
 
             avg_val_loss = val_loss_total / len(val_loader)
-            avg_val_metrics = {k: v / len(val_loader) for k, v in val_metrics_total.items()}
+            avg_val_metrics = {
+                k: v / len(val_loader) for k, v in val_metrics_total.items()
+            }
 
             train_loss_history.append(avg_train_loss)
             val_loss_history.append(avg_val_loss)
@@ -372,8 +374,12 @@ def train_model(custom_config=None, is_tuning=False):
             epoch_duration = epoch_end_time - epoch_start_time
 
             if len(avg_train_metrics) > 1:
-                train_metrics_str = ", ".join(f"{k}:{v:.6f}" for k, v in avg_train_metrics.items())
-                val_metrics_str = ", ".join(f"{k}:{v:.6f}" for k, v in avg_val_metrics.items())
+                train_metrics_str = ", ".join(
+                    f"{k}:{v:.6f}" for k, v in avg_train_metrics.items()
+                )
+                val_metrics_str = ", ".join(
+                    f"{k}:{v:.6f}" for k, v in avg_val_metrics.items()
+                )
                 print(
                     f"Epoch {epoch} DONE | Time: {epoch_duration:.2f}s\n"
                     f"  Train: {avg_train_loss:.6f} ({train_metrics_str})\n"
@@ -563,7 +569,9 @@ def evaluate_model(custom_config=None, model_load_path=None):
         all_y_true = []
         all_y_pred = []
         all_v_mask = []
-        all_extra_features = {feat_name: [] for feat_name in PLOT_EXTRA_FEATURES.values()}
+        all_extra_features = {
+            feat_name: [] for feat_name in PLOT_EXTRA_FEATURES.values()
+        }
 
         with torch.no_grad():
             for batch in dl:
@@ -615,6 +623,8 @@ def evaluate_model(custom_config=None, model_load_path=None):
 
             if i < 5:
                 wave_path = os.path.join(TEST_EVAL_DIR, f"waveform_{song_name}.png")
+                shift_length = feature_info.get("shift_length", 512)
+                sr = feature_info.get("sr", 44100)
                 evaluator.plot_waveform(
                     song_name,
                     y_true_np,
@@ -623,6 +633,8 @@ def evaluate_model(custom_config=None, model_load_path=None):
                     y_param_names,
                     voicing_mask=v_mask_np,
                     extra_features=extra_features_np,
+                    sr=sr,
+                    shift_length=shift_length,
                 )
 
     evaluator.plot_scatter(TEST_EVAL_DIR, EXPERIMENT_NAME, y_param_names)
@@ -631,7 +643,9 @@ def evaluate_model(custom_config=None, model_load_path=None):
 
 
 if __name__ == "__main__":
-    with open(os.path.join(BASE_DIR, "train_settings.json"), "r", encoding="utf-8") as f:
+    with open(
+        os.path.join(BASE_DIR, "train_settings.json"), "r", encoding="utf-8"
+    ) as f:
         config = json.load(f)
     train_model(custom_config=config)
     evaluate_model(custom_config=config)

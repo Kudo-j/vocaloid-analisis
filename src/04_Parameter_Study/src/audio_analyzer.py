@@ -10,7 +10,9 @@ import librosa
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "util"))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "util")
+)
 from feature_extractor import AudioFeatureExtractor
 
 
@@ -113,10 +115,10 @@ FEATURE_PLOT_TYPES = {
 class AudioAnalyzer:
     """音響特徴量の抽出・差分計算・相関分析"""
 
-    def __init__(self, sr=44100, hop_length=256):
+    def __init__(self, sr=44100, shift_length=512):
         self.sr = sr
-        self.hop_length = hop_length
-        self.extractor = AudioFeatureExtractor(sr=sr, hop_length=hop_length)
+        self.shift_length = shift_length
+        self.extractor = AudioFeatureExtractor(sr=sr, shift_length=shift_length)
 
     def extract_features(self, wav_path, feature_types):
         """
@@ -342,5 +344,5 @@ class AudioAnalyzer:
     def get_time_axis(self, total_frames):
         """フレーム数に対応する時間軸を返す"""
         return librosa.frames_to_time(
-            np.arange(total_frames), sr=self.sr, hop_length=self.hop_length
+            np.arange(total_frames), sr=self.sr, hop_length=self.shift_length
         )

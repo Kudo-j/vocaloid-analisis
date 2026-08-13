@@ -127,7 +127,7 @@ def _find_param_files(prefix, param_name, data_dir):
 def _get_target_params():
     """解析対象パラメータのリストを返す"""
     if "ALL" in cfg.TARGET_PARAMS:
-        parser = VSQXParser(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+        parser = VSQXParser(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
         return parser.vsqx_config["DYNAMIC_PARAM_IDS"]
     return cfg.TARGET_PARAMS
 
@@ -287,9 +287,9 @@ def main():
     print(f"  Features:    {feature_list}")
     print(f"  Conditions:  {len(cfg.VOWEL_CONDITIONS)}")
 
-    reader = VSQXCompare(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
-    analyzer = AudioAnalyzer(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
-    visualizer = VowelDiffVisualizer(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+    reader = VSQXCompare(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
+    analyzer = AudioAnalyzer(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
+    visualizer = VowelDiffVisualizer(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
 
     for param_name in target_params:
         print(f"\n{'='*60}")

@@ -65,9 +65,9 @@ def _correlation_label(r_abs):
 class DiffVisualizer:
     """差分解析結果の可視化"""
 
-    def __init__(self, sr=44100, hop_length=256, figsize=(18, 28), dpi=300):
+    def __init__(self, sr=44100, shift_length=256, figsize=(18, 28), dpi=300):
         self.sr = sr
-        self.hop_length = hop_length
+        self.shift_length = shift_length
         self.figsize = figsize
         self.dpi = dpi
 
@@ -219,7 +219,7 @@ class DiffVisualizer:
         """データ長に対応する時間軸"""
         import librosa
         return librosa.frames_to_time(
-            np.arange(len(data)), sr=self.sr, hop_length=self.hop_length
+            np.arange(len(data)), sr=self.sr, hop_length=self.shift_length
         )
 
     def _add_note_regions(self, ax, notes, alpha=0.08):

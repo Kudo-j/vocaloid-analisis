@@ -21,7 +21,7 @@ from vsqx_parser import VSQXParser
 from feature_extractor import AudioFeatureExtractor
 
 # VSQX仕様の取得
-_dummy_parser = VSQXParser(sr=44100, hop_length=256)
+_dummy_parser = VSQXParser(sr=44100, shift_length=256)
 VSQX_SPEC = _dummy_parser.vsqx_config
 from model import TransformerModel
 from train_decoder import (
@@ -110,7 +110,7 @@ def update_vsqx_xml(
     output_path: str,
     predictions: Dict[str, np.ndarray],
     sr: int,
-    hop_length: int,
+    shift_length: int,
 ):
     """
     テキストベース（正規表現）でVSQXファイルを書き換える関数。
@@ -211,7 +211,7 @@ def update_vsqx_xml(
 
                 # 時刻変換
                 time_sec = librosa.frames_to_time(
-                    frame_idx, sr=sr, hop_length=hop_length
+                    frame_idx, sr=sr, hop_length=shift_length
                 )
                 audio_tick = time_sec * bpm * resolution / 60.0
 
@@ -291,7 +291,7 @@ def plot_predictions_with_gt(
     voicing_mask: Optional[np.ndarray],
     plot_output_path: str,
     sr: int,
-    hop_length: int,
+    shift_length: int,
 ):
     """
     予測値と正解値を比較する3枚のグラフを生成する。
@@ -302,7 +302,7 @@ def plot_predictions_with_gt(
     無声区間（voicing_mask == 0）は灰色背景で表示し、MAE計算から除外する。
     """
     # 5秒間に対応するフレーム数
-    window_frames = int(5.0 * sr / hop_length)
+    window_frames = int(5.0 * sr / shift_length)
 
     for pid, pred_vals in predictions.items():
         if pid not in ground_truth:
@@ -336,7 +336,7 @@ def plot_predictions_with_gt(
 
         # 時間軸 (秒)
         time_axis = librosa.frames_to_time(
-            np.arange(min_len), sr=sr, hop_length=hop_length
+            np.arange(min_len), sr=sr, hop_length=shift_length
         )
 
         # --- ウィンドウの特定 ---
@@ -528,8 +528,8 @@ def predict_vsqx(args):
     print(f"Model input dim: {num_x_features}, output dim: {num_y_features}")
 
     # 2. Preprocessorの初期化
-    preprocessor = VSQXDNNFormatter(sr=config.SR, hop_length=config.HOP_LENGTH)
-    audio_extractor = AudioFeatureExtractor(sr=config.SR, hop_length=config.HOP_LENGTH)
+    preprocessor = VSQXDNNFormatter(sr=config.SR, shift_length=config.SHIFT_LENGTH)
+    audio_extractor = AudioFeatureExtractor(sr=config.SR, shift_length=config.SHIFT_LENGTH)
     
     # 注入
     preprocessor.vsqx_config["INPUT_VSQX_PARAMS"] = config.INPUT_VSQX_PARAMS
@@ -540,7 +540,8 @@ def predict_vsqx(args):
     print("Processing input files...")
 
     # A. 音声 (features.jsonに記録された特徴量タイプを使用)
-    feature_types = feature_info.get("feature_types", config.FEATURE_TYPES)
+    default_audio_features = [f for features in config.INPUT_AUDIO_PARAMS.values() for f in features]
+    feature_types = feature_info.get("feature_types", default_audio_features)
     print(f"  Audio feature types: {feature_types}")
     audio_features = audio_extractor.get_features(args.wav_path, feature_types)
     audio_features = np.nan_to_num(stats.zscore(audio_features, axis=0))
@@ -645,7 +646,7 @@ def predict_vsqx(args):
         output_path=args.output_path,
         predictions=predictions,
         sr=config.SR,
-        hop_length=config.HOP_LENGTH,
+        shift_length=config.SHIFT_LENGTH,
     )
 
     # 8. 正解値の取得と比較グラフ描画
@@ -681,7 +682,7 @@ def predict_vsqx(args):
             voicing_mask=voicing_mask,
             plot_output_path=args.plot_output_path,
             sr=config.SR,
-            hop_length=config.HOP_LENGTH,
+            shift_length=config.SHIFT_LENGTH,
         )
 
     print("Prediction process finished.")

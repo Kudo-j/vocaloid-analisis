@@ -138,7 +138,7 @@ def main():
 
     # --- 2. VSQX解析 ---
     print("\n[Step 1] Parsing VSQX files...")
-    reader = VSQXCompare(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+    reader = VSQXCompare(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
 
     vsqx_data_a = reader.read_sparse(path_vsqx_a)
     vsqx_data_b = reader.read_sparse(path_vsqx_b)
@@ -202,7 +202,7 @@ def main():
 
     print(f"\n[Step 3] Extracting audio features (Paired for consistent dB ref)...")
     print(f"  Target features ({len(extract_features)}): {extract_features}")
-    analyzer = AudioAnalyzer(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+    analyzer = AudioAnalyzer(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
 
     print(f"  Processing both files to find common reference...")
     features_a, features_b = analyzer.extract_features_paired(
@@ -218,7 +218,7 @@ def main():
     # --- 6. 各パラメータについて解析・可視化 ---
     os.makedirs(output_dir, exist_ok=True)
     visualizer = DiffVisualizer(
-        sr=cfg.SR, hop_length=cfg.HOP_LENGTH, figsize=cfg.FIGSIZE, dpi=cfg.DPI
+        sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH, figsize=cfg.FIGSIZE, dpi=cfg.DPI
     )
 
     for param_name in target_params:
@@ -402,7 +402,7 @@ def _save_analysis_json(
         "vsqx_a": cfg.VSQX_A,
         "vsqx_b": cfg.VSQX_B,
         "sr": cfg.SR,
-        "hop_length": cfg.HOP_LENGTH,
+        "shift_length": cfg.SHIFT_LENGTH,
         "feature_types": computed_features,
         "top_n": getattr(cfg, "TOP_N_FEATURES", None),
         "always_include": getattr(cfg, "ALWAYS_INCLUDE_FEATURES", []),

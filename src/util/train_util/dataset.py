@@ -19,7 +19,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 # 定数
 CHUNK_SIZE = 600
-CHUNK_HOP = 600
+CHUNK_HOP = 300
 
 
 # 発声マスクを使って無音判定する関数
@@ -137,8 +137,10 @@ class VocalDataset(Dataset):
             while start < total_frames:
                 end = start + CHUNK_SIZE
                 if end > total_frames:
-                    break
-                if self.mode == "eval_full" or not _is_silence_chunk(voicing_mask[start:end]):
+                    end = total_frames
+                if self.mode == "eval_full" or not _is_silence_chunk(
+                    voicing_mask[start:end]
+                ):
                     self.chunk_map.append((name_stem, start, end))
                 if end == total_frames:
                     break
@@ -250,7 +252,9 @@ def _count_valid_chunks_in_file(filepath):
     return valid_count
 
 
-def create_datasets(data_dir, songlist_path, valid_ratio=0.10, test_ratio=0.10, split_mode="random"):
+def create_datasets(
+    data_dir, songlist_path, valid_ratio=0.10, test_ratio=0.10, split_mode="random"
+):
     """
     1. 特徴量ロード
     2. 全ファイルスキャン & 有効チャンク数カウント (無音除去)
@@ -281,7 +285,9 @@ def create_datasets(data_dir, songlist_path, valid_ratio=0.10, test_ratio=0.10, 
             # 曲名リストがない場合は、ファイル名の最初の '_' の前までを自動的に曲名とみなす
             raw_names = [f.split("_")[0] for f in all_files]
             song_names = sorted(list(set(raw_names)), key=len, reverse=True)
-            print("Warning: Songlist not found. Grouping files by prefix for splitting.")
+            print(
+                "Warning: Songlist not found. Grouping files by prefix for splitting."
+            )
 
     # --- スキャンとカウント ---
     print("Scanning files for valid chunks (removing silence)...")
@@ -354,8 +360,10 @@ def create_datasets(data_dir, songlist_path, valid_ratio=0.10, test_ratio=0.10, 
             else:
                 train_files.extend(files)
                 split_log["Train"].append((song, files, chunks))
-                print(f"Warning: File '{song}' has no train/valid/test keyword. Assigned to Train.")
-                
+                print(
+                    f"Warning: File '{song}' has no train/valid/test keyword. Assigned to Train."
+                )
+
         target_test = sum([e[2] for e in split_log["Test"]])
         target_valid = sum([e[2] for e in split_log["Valid"]])
     else:

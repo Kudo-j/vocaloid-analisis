@@ -52,7 +52,7 @@ DATA_DIR = "./processed/Step1"  # build_dataset.py の出力先
 OUTPUT_DIR = os.path.join(
     BASE_DIR,
     "output",
-    "Step1",
+    "Step1_RMS",
     "linear",
     f"Context_{CONTEXT_SIZE}",
 )  # 結果の保存先

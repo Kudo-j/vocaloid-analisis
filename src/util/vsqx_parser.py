@@ -15,10 +15,10 @@ class VSQXParser:
     VSQXの前処理、特徴量抽出を管理するクラス。
     """
 
-    def __init__(self, sr, hop_length):
-        # 外部からsrとhop_lengthを受け取る設計に変更
+    def __init__(self, sr, shift_length):
+        # 外部からsrとshift_lengthを受け取る設計に変更
         self.sr = sr
-        self.hop_length = hop_length
+        self.shift_length = shift_length
 
         self.vsqx_config = {
             "DYNAMIC_PARAM_IDS": [
@@ -465,7 +465,7 @@ class VSQXParser:
 
         # フレーム時間軸を生成し線形補間
         frame_times_sec = librosa.frames_to_time(
-            np.arange(total_frames), sr=self.sr, hop_length=self.hop_length
+            np.arange(total_frames), sr=self.sr, hop_length=self.shift_length
         )
         interpolated_values = np.interp(frame_times_sec, times_sec, values)
 

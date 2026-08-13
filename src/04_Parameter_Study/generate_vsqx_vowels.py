@@ -22,15 +22,14 @@ import shutil
 
 # ベースとなるVSQXファイル（「あ」のデータ）
 # ファイル名に含まれる「あ」がターゲット母音に自動置換される
-BASE_VSQX_DIR = "./src_result/Para_Study_data/vsqx/DYN"
+BASE_VSQX_DIR = "./data/Step_org"
 BASE_FILES = [
-    "あ_DYNall1.vsqx",
-    "あ_DYNall32.vsqx",
-    "あ_DYNall127.vsqx",
+    "あ_DYN_Train.vsqx",
+    "あ_DYN_手動.vsqx",
 ]
 
 # 出力先ディレクトリ（ベースと同じ場所に出力する場合は同じパスを指定）
-OUTPUT_DIR = "./src_result/Para_Study_data/vsqx/DYN"
+OUTPUT_DIR = "./data/Step_org"
 
 # 母音マッピング: {入力歌詞: 出力音素}
 # ベースの「あ」は生成不要なので含めない

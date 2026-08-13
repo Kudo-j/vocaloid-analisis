@@ -119,7 +119,7 @@ def binarize_audio_envelope(
     return gate.astype(np.float64)
 
 
-def extract_f0_from_wav(wav_path, sr, hop_length, length_frames):
+def extract_f0_from_wav(wav_path, sr, shift_length, length_frames):
     try:
         y, _ = librosa.load(wav_path, sr=sr)
         f0, _, _ = librosa.pyin(
@@ -127,7 +127,7 @@ def extract_f0_from_wav(wav_path, sr, hop_length, length_frames):
             fmin=librosa.note_to_hz("C2"),
             fmax=librosa.note_to_hz("C7"),
             sr=sr,
-            hop_length=hop_length,
+            shift_length=shift_length,
         )
         f0 = np.nan_to_num(f0)
         if len(f0) < length_frames:
@@ -249,7 +249,7 @@ def analyze_alignment():
 
     indices = get_feature_indices(info)
     sr = info.get("sr", 24000)
-    hop = info.get("hop_length", 128)
+    hop = info.get("shift_length", 128)
     sec_per_frame = hop / sr
     ms_per_frame = sec_per_frame * 1000
 

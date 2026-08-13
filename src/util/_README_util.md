@@ -18,7 +18,7 @@ WAVファイルなどの音声信号から、様々な音響特徴量を抽出�
         *   F0 (基本周波数) ※ `pyworld` (harvest/dio) と `crepe` (ニューラルネットベース) を切り替え可能
         *   Aperiodicity (非周期成分)、ケプストラム
         *   その他スペクトル特徴量 (Spectral Centroid, Bandwidth, Contrast, HNR, Zero Crossing Rate など)
-    *   抽出された各特徴量は、最終的に指定されたフレーム間隔（`hop_length`）に合わせて時間軸が同期（スタック）され、NumPy配列として返却される。
+    *   抽出された各特徴量は、最終的に指定されたフレーム間隔（`shift_length`）に合わせて時間軸が同期（スタック）され、NumPy配列として返却される。
 
 ### 2. `vsqx_parser.py`
 VSQXファイルのパース処理の基盤となるモジュール

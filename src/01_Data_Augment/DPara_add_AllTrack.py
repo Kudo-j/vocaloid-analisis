@@ -1204,10 +1204,10 @@ if __name__ == "__main__":
     # ▼▼▼ 設定をここで行う ▼▼▼
     execution_config = {
         # "input_dir": "./data/vsqx_ALL/original/got_original/vspart_merged/non_dynamic",
-        "input_dir": "./data/あ_DYN160A3",
+        "input_dir": "./data/Step_org",
         # D:\黒岩研究室\卒研\26Voca_Ana\data\あ_DYN160A3
         # "output_base_dir": "./data/vsqx_ALL/original/got_original/augment2/non_dynamic",
-        "output_base_dir": "./data/あ_DYN160A3",
+        "output_base_dir": "./data/Step_org",
         # ★ モード一覧:
         # "crescendo" / "decrescendo" : フレーズ全体の抑揚
         # "attack_dip"                : フレーズの頭で「下がって上がる」

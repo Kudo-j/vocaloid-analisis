@@ -73,7 +73,7 @@ OUTPUT_FILENAME = "multi_features_compare.png"
 
 # 音声設定
 SR = 44100
-HOP_LENGTH = 256
+SHIFT_LENGTH = 256
 
 # プロット設定
 DPI = 300
@@ -132,7 +132,7 @@ def main():
 
     # --- 2. 特徴量抽出 ---
     print("\n[Step 1] Extracting features...")
-    analyzer = AudioAnalyzer(sr=SR, hop_length=HOP_LENGTH)
+    analyzer = AudioAnalyzer(sr=SR, shift_length=SHIFT_LENGTH)
 
     # {label: {feature_name: np.ndarray, ...}, ...}
     all_data = {}
@@ -186,7 +186,7 @@ def main():
             import librosa
 
             time_axis = librosa.frames_to_time(
-                np.arange(len(data)), sr=SR, hop_length=HOP_LENGTH
+                np.arange(len(data)), sr=SR, hop_length=SHIFT_LENGTH
             )
 
             color = colors[file_idx % len(colors)]

@@ -5,8 +5,8 @@ from vsqx_parser import VSQXParser
 
 
 class VSQXCompare(VSQXParser):
-    def __init__(self, sr=44100, hop_length=256):
-        super().__init__(sr, hop_length)
+    def __init__(self, sr=44100, shift_length=512):
+        super().__init__(sr, shift_length)
 
     def read(self, vsqx_path):
         sparse_data = self.read_sparse(vsqx_path)

@@ -64,9 +64,9 @@ def _correlation_color_val(r_abs):
 class VowelVisualizer:
     """母音別パラメータ比較の可視化"""
 
-    def __init__(self, sr=44100, hop_length=256):
+    def __init__(self, sr=44100, shift_length=256):
         self.sr = sr
-        self.hop_length = hop_length
+        self.shift_length = shift_length
 
     # ==================================================================
     # 1. 相関マトリクスヒートマップ
@@ -300,7 +300,7 @@ class VowelVisualizer:
         first_result = list(all_results.values())[0]
         pc = first_result["param_curve"]
         t_param = librosa.frames_to_time(
-            np.arange(len(pc)), sr=self.sr, hop_length=self.hop_length
+            np.arange(len(pc)), sr=self.sr, hop_length=self.shift_length
         )
         default_val = first_result["default_value"]
 
@@ -338,7 +338,7 @@ class VowelVisualizer:
                     d = diff.flatten()
                     t = librosa.frames_to_time(
                         np.arange(len(d)), sr=self.sr,
-                        hop_length=self.hop_length
+                        hop_length=self.shift_length
                     )
                     ax.plot(t, d, color=color, linewidth=0.8, alpha=0.8,
                            label=f"{cond['prefix']} (|r|={r_val:.3f})")
@@ -347,7 +347,7 @@ class VowelVisualizer:
                     d_mean = np.mean(diff, axis=1)
                     t = librosa.frames_to_time(
                         np.arange(len(d_mean)), sr=self.sr,
-                        hop_length=self.hop_length
+                        hop_length=self.shift_length
                     )
                     ax.plot(t, d_mean, color=color, linewidth=0.8, alpha=0.8,
                            label=f"{cond['prefix']} (|r|={r_val:.3f})")

@@ -111,13 +111,13 @@ class VSQXDNNFormatter(VSQXParser):
 
             s_idx = np.clip(
                 librosa.time_to_frames(
-                    start_sec, sr=self.sr, hop_length=self.hop_length
+                    start_sec, sr=self.sr, hop_length=self.shift_length
                 ),
                 0,
                 total_frames,
             )
             e_idx = np.clip(
-                librosa.time_to_frames(end_sec, sr=self.sr, hop_length=self.hop_length),
+                librosa.time_to_frames(end_sec, sr=self.sr, hop_length=self.shift_length),
                 0,
                 total_frames,
             )
@@ -157,7 +157,7 @@ class VSQXDNNFormatter(VSQXParser):
 
                 current_frames = np.arange(s_idx, e_idx)
                 current_times_sec = librosa.frames_to_time(
-                    current_frames, sr=self.sr, hop_length=self.hop_length
+                    current_frames, sr=self.sr, hop_length=self.shift_length
                 )
                 mask_indices = current_times_sec < vib_start_sec
 
