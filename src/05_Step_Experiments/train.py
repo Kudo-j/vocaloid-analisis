@@ -279,7 +279,7 @@ def train_model(custom_config=None, is_tuning=False):
             train_batches = len(train_loader)
 
             for i, batch in enumerate(train_loader):
-                x_dict, y_dict, mask_batch, len_batch = batch
+                x_dict, y_dict, mask_batch, len_batch, _, _ = batch
 
                 # x_dictはモデル内で処理するためデバイスに転送して辞書のまま保持
                 x_dict_device = {k: v.to(device) for k, v in x_dict.items()}
@@ -345,7 +345,7 @@ def train_model(custom_config=None, is_tuning=False):
             print(f"  Validating...")
             with torch.no_grad():
                 for batch in val_loader:
-                    x_dict, y_dict, mask_batch, len_batch = batch
+                    x_dict, y_dict, mask_batch, len_batch, _, _ = batch
 
                     x_dict_device = {k: v.to(device) for k, v in x_dict.items()}
                     y_batch = _concat_branch_tensors(y_dict, device)
@@ -566,16 +566,20 @@ def evaluate_model(custom_config=None, model_load_path=None):
             continue
         dl = DataLoader(ds, batch_size=32, shuffle=False, collate_fn=collate_fn)
 
-        all_y_true = []
-        all_y_pred = []
-        all_v_mask = []
-        all_extra_features = {
-            feat_name: [] for feat_name in PLOT_EXTRA_FEATURES.values()
+        total_len = feature_info["file_lengths"][song_name]
+        y_true_full = np.zeros((total_len, total_y_dim), dtype=np.float32)
+        y_pred_full = np.zeros((total_len, total_y_dim), dtype=np.float32)
+        v_mask_full = np.zeros(total_len, dtype=np.float32)
+        overlap_count = np.zeros((total_len, 1), dtype=np.float32)
+
+        extra_features_full = {
+            feat_name: np.zeros(total_len, dtype=np.float32)
+            for feat_name in PLOT_EXTRA_FEATURES.values()
         }
 
         with torch.no_grad():
             for batch in dl:
-                x_dict, y_dict, mask_batch, len_batch = batch
+                x_dict, y_dict, mask_batch, len_batch, starts, ends = batch
                 x_dict_device = {k: v.to(device) for k, v in x_dict.items()}
                 y_batch = _concat_branch_tensors(y_dict, device)
                 mask_batch = mask_batch.to(device)
@@ -586,39 +590,46 @@ def evaluate_model(custom_config=None, model_load_path=None):
 
                 for b_idx in range(len(len_batch)):
                     seq_len = len_batch[b_idx].item()
-                    y_true_seq = y_batch[b_idx, :seq_len]
-                    y_pred_seq = output[b_idx, :seq_len]
-                    v_mask_seq = mask_batch[b_idx, :seq_len]
-                    if v_mask_seq.dim() > 1:
-                        v_mask_seq = v_mask_seq.squeeze(-1)
+                    s = starts[b_idx].item()
+                    e = ends[b_idx].item()
+                    
+                    # 実際の長さとseq_lenが一致するはずですが、念のためスライス
+                    actual_len = min(seq_len, e - s)
+                    e = s + actual_len
 
-                    all_y_true.append(y_true_seq.cpu().numpy())
-                    all_y_pred.append(y_pred_seq.cpu().numpy())
-                    all_v_mask.append(v_mask_seq.cpu().numpy())
+                    y_true_seq = y_batch[b_idx, :actual_len].cpu().numpy()
+                    y_pred_seq = output[b_idx, :actual_len].cpu().numpy()
+                    v_mask_seq = mask_batch[b_idx, :actual_len].cpu().numpy()
+                    if v_mask_seq.ndim > 1:
+                        v_mask_seq = np.squeeze(v_mask_seq, axis=-1)
+
+                    # 正解データや追加特徴量は重なり部分で同じ値なので上書きでよい
+                    y_true_full[s:e] = y_true_seq
+                    
+                    # 予測値とマスクは加算して最後に平均をとる
+                    y_pred_full[s:e] += y_pred_seq
+                    v_mask_full[s:e] += v_mask_seq
+                    overlap_count[s:e, 0] += 1.0
 
                     for k, feat_name in PLOT_EXTRA_FEATURES.items():
                         if k in x_dict:
-                            feat_arr = x_dict[k][b_idx, :seq_len]
-                            if feat_arr.dim() > 1:
+                            feat_arr = x_dict[k][b_idx, :actual_len].cpu().numpy()
+                            if feat_arr.ndim > 1:
                                 feat_arr = feat_arr[:, 0]
-                            all_extra_features[feat_name].append(feat_arr.cpu().numpy())
+                            extra_features_full[feat_name][s:e] = feat_arr
 
-        if len(all_y_true) > 0:
-            y_true_np = np.concatenate(all_y_true, axis=0)
-            y_pred_np = np.concatenate(all_y_pred, axis=0)
-            v_mask_np = np.concatenate(all_v_mask, axis=0)
+        # オーバーラップ部分の平均をとる
+        valid_idx = overlap_count[:, 0] > 0
+        y_pred_full[valid_idx] /= overlap_count[valid_idx]
+        v_mask_full[valid_idx] /= overlap_count[valid_idx, 0]
 
-            extra_features_np = {}
-            for feat_name, arr_list in all_extra_features.items():
-                if len(arr_list) > 0:
-                    extra_features_np[feat_name] = np.concatenate(arr_list, axis=0)
-
+        if np.any(valid_idx):
             evaluator.add_song_result(
                 song_name,
-                y_true_np,
-                y_pred_np,
+                y_true_full,
+                y_pred_full,
                 y_param_names,
-                voicing_mask=v_mask_np,
+                voicing_mask=v_mask_full,
             )
 
             if i < 5:
@@ -627,12 +638,12 @@ def evaluate_model(custom_config=None, model_load_path=None):
                 sr = feature_info.get("sr", 44100)
                 evaluator.plot_waveform(
                     song_name,
-                    y_true_np,
-                    y_pred_np,
+                    y_true_full,
+                    y_pred_full,
                     wave_path,
                     y_param_names,
-                    voicing_mask=v_mask_np,
-                    extra_features=extra_features_np,
+                    voicing_mask=v_mask_full,
+                    extra_features=extra_features_full,
                     sr=sr,
                     shift_length=shift_length,
                 )

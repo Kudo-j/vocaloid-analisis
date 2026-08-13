@@ -192,7 +192,7 @@ class VocalDataset(Dataset):
 
         mask_tensor = torch.FloatTensor(full_mask[start_frame:end_frame])
 
-        return x_tensors, y_tensors, mask_tensor
+        return x_tensors, y_tensors, mask_tensor, start_frame, end_frame
 
 
 def collate_fn(batch):
@@ -200,7 +200,7 @@ def collate_fn(batch):
     辞書型ブランチに対応したcollate関数。
     各ブランチごとにパディングを行う。
     """
-    x_dicts, y_dicts, masks = zip(*batch)
+    x_dicts, y_dicts, masks, starts, ends = zip(*batch)
     lengths = torch.LongTensor([len(list(x.values())[0]) for x in x_dicts])
 
     # 各ブランチごとにパディング
@@ -218,7 +218,10 @@ def collate_fn(batch):
 
     mask_padded = pad_sequence(masks, batch_first=True, padding_value=0.0)
 
-    return x_padded, y_padded, mask_padded, lengths
+    starts_tensor = torch.LongTensor(starts)
+    ends_tensor = torch.LongTensor(ends)
+
+    return x_padded, y_padded, mask_padded, lengths, starts_tensor, ends_tensor
 
 
 def _count_valid_chunks_in_file(filepath):
