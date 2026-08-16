@@ -233,10 +233,13 @@ class Evaluator:
             ax.set_title(f"波形比較: {song_name} - {pname}  |  MAE = {mae:.2f}")
             if pname == "PIT":
                 ax.set_ylabel("Pitch (-8192~8191)")
+                ax.set_ylim(-8192, 8191)
             elif pname == "PBS":
                 ax.set_ylabel("PBS (0~24)")
+                ax.set_ylim(0, 24)
             else:
                 ax.set_ylabel("Value (0~127)")
+                ax.set_ylim(0, 127)
 
             ax.legend(loc="upper right")
             ax.grid(True, alpha=0.3)
@@ -295,8 +298,19 @@ class Evaluator:
             plt.figure(figsize=(8, 8))
             plt.scatter(y_t, y_p, alpha=0.05, s=1, color="steelblue")
 
-            val_min = min(y_t.min(), y_p.min())
-            val_max = max(y_t.max(), y_p.max())
+            if pname == "PIT":
+                val_min, val_max = -8192, 8191
+                label_suffix = ""
+            elif pname == "PBS":
+                val_min, val_max = 0, 24
+                label_suffix = ""
+            else:
+                val_min, val_max = 0, 127
+                label_suffix = "(0~127)"
+
+            plt.xlim(val_min, val_max)
+            plt.ylim(val_min, val_max)
+
             plt.plot(
                 [val_min, val_max],
                 [val_min, val_max],
@@ -305,7 +319,6 @@ class Evaluator:
                 label="Ideal",
             )
 
-            label_suffix = "(0~127)" if pname not in ["PIT", "PBS"] else ""
             plt.xlabel(f"実測値 (Ground Truth) {label_suffix}")
             plt.ylabel(f"予測値 (Predicted) {label_suffix}")
             plt.title(f"散布図 (Scatter Plot): {prefix} - {pname}")
