@@ -1,6 +1,3 @@
-import numpy as np
-import librosa
-import xml.etree.ElementTree as ET
 from vsqx_parser import VSQXParser
 
 

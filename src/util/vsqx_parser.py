@@ -1,13 +1,8 @@
 import os
 import xml.etree.ElementTree as ET
-import json
-import pickle
 import numpy as np
 import librosa
-import gc
 from collections import defaultdict
-from scipy import stats
-from feature_extractor import AudioFeatureExtractor
 
 
 class VSQXParser:

@@ -29,9 +29,10 @@ class AudioFeatureExtractor:
                 "bins_per_octave": 24,
                 "fmin": librosa.note_to_hz("C1"),
             },
-            "mel": {"n_mels": 80, "n_fft": 2048, "fmax": None},
+            "mel": {"n_mels": 80, "n_fft": 1024, "fmax": None},
             "mfcc": {"n_mfcc": 20},
-            "stft": {"n_fft": 2048, "win_length": None, "window": "hann"},
+            "stft": {"n_fft": 1024, "win_length": None, "window": "hann"},
+            "rms": {"frame_length": 1024},
             "f0": {
                 # "pyworld" (harvest) or "crepe" を選択可能にする
                 "method": "pyworld",
@@ -40,8 +41,8 @@ class AudioFeatureExtractor:
                 "model_capacity": "full",  # for crepe ("tiny", "small", "medium", "large", "full")
                 "pyworld_algo": "dio",  # "harvest" は非常に遅いため "dio" をデフォルトにする
             },
-            "cepstrum": {"n_fft": 2048, "n_coef": 40},
-            "smoothed_cepstrum": {"n_fft": 2048, "n_coef": 40},
+            "cepstrum": {"n_fft": 1024, "n_coef": 40},
+            "smoothed_cepstrum": {"n_fft": 1024, "n_coef": 40},
             "lpc": {"order": 32},  # LPC次数 (声道フィルタの推定精度)
         }
 
@@ -99,7 +100,8 @@ class AudioFeatureExtractor:
         return librosa.feature.mfcc(S=log_S, sr=self.sr, n_mfcc=params["n_mfcc"]).T
 
     def _compute_rms(self, y):
-        rms = librosa.feature.rms(y=y, hop_length=self.shift_length)
+        params = self.config["rms"]
+        rms = librosa.feature.rms(y=y, frame_length=params["frame_length"], hop_length=self.shift_length)
         # 振幅をdB表記に変換 (ref=1.0)
         rms_db = librosa.amplitude_to_db(rms, ref=1.0, top_db=None)
         return rms_db.T
@@ -220,8 +222,9 @@ class AudioFeatureExtractor:
     # --- 新規: スペクトル重心 ---
     def _compute_spectral_centroid(self, y):
         """スペクトル重心 (Time, 1) - 音の明るさの指標"""
+        params = self.config["stft"]
         return librosa.feature.spectral_centroid(
-            y=y, sr=self.sr, hop_length=self.shift_length
+            y=y, sr=self.sr, n_fft=params["n_fft"], hop_length=self.shift_length
         ).T
 
     def _compute_waveform(self, y):
@@ -231,15 +234,17 @@ class AudioFeatureExtractor:
     # --- 新規: スペクトル帯域幅 ---
     def _compute_spectral_bandwidth(self, y):
         """スペクトル帯域幅 (Time, 1) - 音のスペクトル幅"""
+        params = self.config["stft"]
         return librosa.feature.spectral_bandwidth(
-            y=y, sr=self.sr, hop_length=self.shift_length
+            y=y, sr=self.sr, n_fft=params["n_fft"], hop_length=self.shift_length
         ).T
 
     # --- 新規: スペクトルコントラスト ---
     def _compute_spectral_contrast(self, y):
         """スペクトルコントラスト (Time, 7) - 周波数帯域ごとのコントラスト"""
+        params = self.config["stft"]
         return librosa.feature.spectral_contrast(
-            y=y, sr=self.sr, hop_length=self.shift_length
+            y=y, sr=self.sr, n_fft=params["n_fft"], hop_length=self.shift_length
         ).T
 
     # --- 新規: 調波対雑音比 (HNR) ---
@@ -261,7 +266,10 @@ class AudioFeatureExtractor:
     # --- 新規: ゼロ交差率 ---
     def _compute_zero_crossing_rate(self, y):
         """ゼロ交差率 (Time, 1)"""
-        return librosa.feature.zero_crossing_rate(y=y, hop_length=self.shift_length).T
+        params = self.config["rms"]
+        return librosa.feature.zero_crossing_rate(
+            y=y, frame_length=params["frame_length"], hop_length=self.shift_length
+        ).T
 
     # --- LPC残差（音源信号）抽出 ---
     def _compute_lpc_residual(self, y):
@@ -352,7 +360,8 @@ class AudioFeatureExtractor:
         フォルマントの影響を受けない、純粋な音源エネルギーの変化を捉える。
         """
         residual = self._compute_lpc_residual(y)
-        rms = librosa.feature.rms(y=residual, hop_length=self.shift_length)
+        params = self.config["rms"]
+        rms = librosa.feature.rms(y=residual, frame_length=params["frame_length"], hop_length=self.shift_length)
         rms_db = librosa.amplitude_to_db(rms, ref=1.0, top_db=None)
         return rms_db.T
 
