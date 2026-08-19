@@ -51,7 +51,7 @@ class CNNBiLSTM(nn.Module):
         conv_channels=64,
         kernel_size=9,
         hidden_dim=64,
-        num_layers=2,
+        num_layers=1,
         dropout=0.3,
     ):
         super().__init__()
@@ -62,13 +62,13 @@ class CNNBiLSTM(nn.Module):
         padding = (kernel_size - 1) // 2
         self.conv_block = nn.Sequential(
             nn.Conv1d(
-                input_dim, conv_channels, kernel_size, padding=padding, bias=False
+                input_dim, conv_channels, kernel_size, padding=padding, padding_mode='reflect', bias=False
             ),
             nn.BatchNorm1d(conv_channels),
             nn.ReLU(),
             # --- 2層目以降 ---
             # conv_blockを増やしたい場合は以下をコピペ
-            # nn.Conv1d(conv_channels, conv_channels, kernel_size, padding=padding, bias=False),
+            # nn.Conv1d(conv_channels, conv_channels, kernel_size, padding=padding, padding_mode='reflect', bias=False),
             # nn.BatchNorm1d(conv_channels),
             # nn.ReLU(),
         )
