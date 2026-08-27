@@ -76,6 +76,7 @@ class VSQXDNNFormatter(VSQXParser):
         }
         phoneme_ts = np.full(total_frames, "unknown", dtype=object)
         voicing_mask_ts = np.zeros((total_frames, 1), dtype=np.float32)
+        note_boundary_ts = np.zeros((total_frames, 2), dtype=np.float32)
         evec_id_ts = np.zeros(total_frames, dtype=np.int32)
         repeat_ts = np.zeros(total_frames, dtype=np.float32)
         static_params_ts = {
@@ -179,6 +180,31 @@ class VSQXDNNFormatter(VSQXParser):
             evec_id_ts[s_idx:e_idx] = note_info["evec_id"]
             repeat_ts[s_idx:e_idx] = note_info["repeat"]
 
+            # 5. ノート境界重み（アタック/リリースそれぞれ s_idx, e_idx を頂点とし前後20フレームで山型を形成）
+            radius = 20
+
+            # Attack (Channel 0): s_idx を中心とする山型
+            att_start = max(0, s_idx - radius)
+            att_end = min(total_frames, s_idx + radius + 1)
+            if att_start < att_end:
+                att_frames = np.arange(att_start, att_end)
+                att_dist = np.abs(att_frames - s_idx)
+                att_weights = np.maximum(0.0, 1.0 - att_dist / float(radius)).astype(np.float32)
+                note_boundary_ts[att_start:att_end, 0] = np.maximum(
+                    note_boundary_ts[att_start:att_end, 0], att_weights
+                )
+
+            # Release (Channel 1): e_idx を中心とする山型
+            rel_start = max(0, e_idx - radius)
+            rel_end = min(total_frames, e_idx + radius + 1)
+            if rel_start < rel_end:
+                rel_frames = np.arange(rel_start, rel_end)
+                rel_dist = np.abs(rel_frames - e_idx)
+                rel_weights = np.maximum(0.0, 1.0 - rel_dist / float(radius)).astype(np.float32)
+                note_boundary_ts[rel_start:rel_end, 1] = np.maximum(
+                    note_boundary_ts[rel_start:rel_end, 1], rel_weights
+                )
+
         # --- 動的パラメータの補間 ---
         for param_id in self.vsqx_config["DYNAMIC_PARAM_IDS"]:
             if param_id not in dynamic_params_ts:
@@ -206,6 +232,7 @@ class VSQXDNNFormatter(VSQXParser):
             "evec_id": evec_id_ts,
             "repeat": repeat_ts,
             "voicing_mask": voicing_mask_ts,
+            "note_boundary": note_boundary_ts,
         }
 
     def normalize_features(self, raw_data):
@@ -284,5 +311,9 @@ class VSQXDNNFormatter(VSQXParser):
 
         # 9. Voicing Mask（そのまま）
         flat_normalized["voicing_mask"] = raw_data["voicing_mask"]
+
+        # 10. Note Boundary Weight（そのまま）
+        if "note_boundary" in raw_data:
+            flat_normalized["NOTE_BOUNDARY"] = raw_data["note_boundary"].astype(np.float32)
 
         return flat_normalized

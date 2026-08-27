@@ -1,6 +1,6 @@
 """
 train.py
-========
+=== =====
 全Step共通の統合学習スクリプト。
 
 config 領域のパラメータを変更するだけで、
@@ -55,7 +55,7 @@ def _build_model(model_type, input_dim, output_dim, model_params):
     config の MODEL_TYPE に基づいてモデルを動的にインスタンス化する。
 
     Args:
-        model_type: モデル種別文字列。
+        model_type: モデル種別文字列 ("cnn_bilstm", "bilstm_base")。
         input_dim: 入力次元数。
         output_dim: 出力次元数。
         model_params: モデルパラメータの辞書。
