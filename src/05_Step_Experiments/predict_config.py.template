@@ -1,0 +1,51 @@
+"""
+predict_config.py
+=================
+predict.py と plot_rendered_eval.py が共通で参照する設定ファイル。
+対象曲名やパスの変更はこのファイルだけで行う。
+"""
+
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# =============================================================================
+#  config 領域
+# =============================================================================
+
+# --- 推論対象 ---
+INPUT_FILE_NAME = "Test_8"  # 対象曲のファイル名 (拡張子なし)
+
+# --- ファイル検索ディレクトリ ---
+WAV_SEARCH_DIR = "./data/wav"  # 正解WAVの検索フォルダ
+VSQX_SEARCH_DIR = "./data/vsqx"  # 正解VSQXの検索フォルダ
+PRED_WAV_SEARCH_DIR = os.path.join(
+    BASE_DIR, "output"
+)  # Vocaloidで書き出した予測WAVの検索フォルダ
+
+# --- 学習済みモデル ---
+# train_settings.json と同じ EXPERIMENT_NAME / MODEL_TYPE を使用
+EXPERIMENT_NAME = "Step1"
+MODEL_TYPE = "cnn_bilstm"
+MODEL_PATH = os.path.join(
+    BASE_DIR, "output", EXPERIMENT_NAME, MODEL_TYPE, "best_model.pth"
+)
+
+# --- features.json (特徴量定義・正規化パラメータ) ---
+FEATURES_JSON_PATH = os.path.join(
+    BASE_DIR, "processed", "Step1", "features.json"
+)
+
+# --- train_settings.json (モデル構築パラメータ) ---
+TRAIN_SETTINGS_PATH = os.path.join(BASE_DIR, "train_settings.json")
+
+# --- 出力先 ---
+OUTPUT_DIR = os.path.join(BASE_DIR, "output", "predict")
+
+# --- チャンク推論設定 (スライディングウィンドウ・オーバーラップ加算平均) ---
+CHUNK_SIZE = 600  # 1回の推論フレーム数 (dataset.py の CHUNK_SIZE と合わせる)
+CHUNK_HOP = 300  # シフト幅 (dataset.py の CHUNK_HOP と合わせる)
+
+# =============================================================================
+# config 領域ここまで
+# =============================================================================

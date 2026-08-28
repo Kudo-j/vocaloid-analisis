@@ -1,0 +1,42 @@
+{
+    "DATA_DIR": "./processed/Step1",
+    "OUTPUT_BASE_DIR": "output",
+    "EXPERIMENT_NAME": "Step1",
+    "SONGLIST_PATH": "",
+    "PLOT_EXTRA_FEATURES": {
+        "audio_rms": "RMS"
+    },
+    "SPLIT_MODE": "fixed_name",
+    "MODEL_TYPE": "cnn_bilstm",
+    "LOSS_TYPE": "mse",
+    "FUSION_STRATEGY": "pass_through",
+    "BRANCH_MODULES": {
+        "audio_rms": "none",
+    },
+    "BATCH_SIZE": 128,
+    "ACCUM_STEPS": 1,
+    "EPOCHS": 100,
+    "LR": 1e-4,
+    "MAX_LR": 1e-3,
+    "PATIENCE": 100,
+    "VALID_RATIO": 0.2,
+    "TEST_RATIO": 0.2,
+    "MODEL_PARAMS": {
+        "cnn_bilstm": {
+            "conv_channels": 64,
+            "kernel_size": 19,
+            "hidden_dim": 64,
+            "num_layers": 1,
+            "dropout": 0.3,
+            "use_attention": true,
+            "num_heads": 4
+        },
+        "bilstm_base": {
+            "hidden_dim": 64,
+            "num_layers": 1,
+            "dropout": 0.3,
+            "use_attention": true,
+            "num_heads": 4
+        }
+    }
+}
