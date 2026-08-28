@@ -9,9 +9,10 @@ import matplotlib as mpl
 # 日本語フォントの設定（文字化け対策）
 # Windows環境で一般的なメイリオ、またはMSゴシックを指定
 mpl.rcParams["font.family"] = ["Meiryo", "MS Gothic", "sans-serif"]
-from openpyxl import load_workbook
+from openpyxl import Workbook
 from openpyxl.worksheet.table import Table, TableStyleInfo
-from openpyxl.styles import Font
+from openpyxl.styles import Font, PatternFill, Border, Side
+from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.utils import get_column_letter
 
 # パス解決 (呼び出し元の位置に関わらず losses.py をインポート可能にする)
@@ -332,7 +333,8 @@ class Evaluator:
     def export_report(self, save_excel_path):
         """
         蓄積された全曲の評価結果をExcelとして整形して保存する。
-        Pandasとopenpyxlを用いて、テーブル化とソートを行う。
+        上部にサマリーテーブル（平均・中央値・最大値・最小値＋データ名）を配置し、
+        下部にカラースケール付きのメインデータテーブルを配置する。
         """
         if not self.results:
             print("エクスポートする評価結果がありません。")
@@ -351,29 +353,107 @@ class Evaluator:
             drop=True
         )
 
-        # --- 平均行の作成 ---
         numeric_cols = [c for c in final_cols if c != "Song Name"]
-        avg_row = {"Song Name": "AVERAGE"}
-        for col in numeric_cols:
-            avg_row[col] = df_sorted[col].mean()
 
-        df_avg = pd.concat([df_sorted, pd.DataFrame([avg_row])], ignore_index=True)
+        # 各統計行の「データ名」を Total Loss 基準で決定
+        max_song = df_sorted.loc[df_sorted["Total Loss"].idxmax(), "Song Name"]
+        min_song = df_sorted.loc[df_sorted["Total Loss"].idxmin(), "Song Name"]
+        median_val = df_sorted["Total Loss"].median()
+        median_idx = (df_sorted["Total Loss"] - median_val).abs().idxmin()
+        median_song = df_sorted.loc[median_idx, "Song Name"]
 
         os.makedirs(os.path.dirname(save_excel_path), exist_ok=True)
 
         try:
-            # まずPandasでExcelにベタ書き
-            df_avg.to_excel(save_excel_path, index=False)
-
-            # openpyxlで装飾
-            wb = load_workbook(save_excel_path)
+            wb = Workbook()
             ws = wb.active
+            ws.title = "Evaluation"
 
-            num_cols = len(final_cols)
+            # ==========================================================
+            # サマリーテーブル (Rows 1-5)
+            # ==========================================================
+            summary_header = ["指標名", "データ名"] + numeric_cols
+            summary_rows = [
+                ["平均値 (Mean)", ""] + [df_sorted[c].mean() for c in numeric_cols],
+                ["中央値 (Median)", median_song] + [df_sorted[c].median() for c in numeric_cols],
+                ["最大値 (Max)", max_song] + [df_sorted[c].max() for c in numeric_cols],
+                ["最小値 (Min)", min_song] + [df_sorted[c].min() for c in numeric_cols],
+            ]
+
+            # ヘッダー書き込み
+            header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            header_font = Font(bold=True, color="FFFFFF")
+            for col_idx, val in enumerate(summary_header, 1):
+                cell = ws.cell(row=1, column=col_idx, value=val)
+                cell.fill = header_fill
+                cell.font = header_font
+
+            # 定義: 中央値・最大値・最小値用のソフトカラー背景
+            fill_median = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # 淡い黄
+            fill_max = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")     # 淡い赤
+            fill_min = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")     # 淡い緑
+
+            # データ行書き込み＆各指標に応じた行の色付け
+            summary_row_fills = [None, fill_median, fill_max, fill_min]
+            bold_font = Font(bold=True)
+            for row_offset, row_data in enumerate(summary_rows, 2):
+                row_fill = summary_row_fills[row_offset - 2]
+                for col_idx, val in enumerate(row_data, 1):
+                    cell = ws.cell(row=row_offset, column=col_idx, value=val)
+                    if row_fill:
+                        cell.fill = row_fill
+                # 指標名列を太字に
+                ws.cell(row=row_offset, column=1).font = bold_font
+
+            # サマリーブロックに罫線を適用
+            thin_border = Border(
+                left=Side(style="thin"),
+                right=Side(style="thin"),
+                top=Side(style="thin"),
+                bottom=Side(style="thin"),
+            )
+            for row_idx in range(1, 6):
+                for col_idx in range(1, len(summary_header) + 1):
+                    ws.cell(row=row_idx, column=col_idx).border = thin_border
+
+            # ==========================================================
+            # メインデータテーブル (Row 7+)
+            # ==========================================================
+            main_start_row = 7
+
+            # ヘッダー書き込み
+            for col_idx, col_name in enumerate(final_cols, 1):
+                ws.cell(row=main_start_row, column=col_idx, value=col_name)
+
+            # データ行書き込み（中央値・最大値・最小値の行のみハイライト）
+            for row_offset, (_, row_data) in enumerate(df_sorted.iterrows(), 1):
+                row_idx = main_start_row + row_offset
+                song_name = row_data["Song Name"]
+
+                # 対象の行に応じた色付け判定
+                target_fill = None
+                if song_name == max_song:
+                    target_fill = fill_max
+                elif song_name == min_song:
+                    target_fill = fill_min
+                elif song_name == median_song:
+                    target_fill = fill_median
+
+                for col_idx, col_name in enumerate(final_cols, 1):
+                    cell = ws.cell(
+                        row=row_idx,
+                        column=col_idx,
+                        value=row_data[col_name],
+                    )
+                    if target_fill:
+                        cell.fill = target_fill
+
+            # テーブル書式の適用
             num_data_rows = len(df_sorted)
-
-            # テーブル化
-            table_ref = f"A1:{get_column_letter(num_cols)}{num_data_rows + 1}"
+            table_end_row = main_start_row + num_data_rows
+            table_ref = (
+                f"A{main_start_row}:{get_column_letter(len(final_cols))}{table_end_row}"
+            )
             table = Table(displayName="EvalResults", ref=table_ref)
             style = TableStyleInfo(
                 name="TableStyleMedium9",
@@ -385,21 +465,22 @@ class Evaluator:
             table.tableStyleInfo = style
             ws.add_table(table)
 
-            # 平均行を太字に
-            avg_row_idx = num_data_rows + 2
-            bold_font = Font(bold=True)
-            for col_idx in range(1, num_cols + 1):
-                ws.cell(row=avg_row_idx, column=col_idx).font = bold_font
-
+            # ==========================================================
             # 列幅の自動調整
-            for col_idx in range(1, num_cols + 1):
+            # ==========================================================
+            total_cols = max(len(summary_header), len(final_cols))
+            for col_idx in range(1, total_cols + 1):
                 col_letter = get_column_letter(col_idx)
-                max_len = len(str(ws.cell(row=1, column=col_idx).value or ""))
-                for row_idx in range(2, avg_row_idx + 1):
+                max_len = 0
+                for row_idx in range(1, table_end_row + 1):
                     cell_val = ws.cell(row=row_idx, column=col_idx).value
                     if cell_val is not None:
-                        max_len = max(max_len, len(str(cell_val)))
-                ws.column_dimensions[col_letter].width = min(max_len + 2, 30)
+                        if isinstance(cell_val, float):
+                            cell_str = f"{cell_val:.6f}"
+                        else:
+                            cell_str = str(cell_val)
+                        max_len = max(max_len, len(cell_str))
+                ws.column_dimensions[col_letter].width = min(max_len + 3, 30)
 
             wb.save(save_excel_path)
             print(f"\n評価レポートを保存しました: {save_excel_path}")
@@ -407,5 +488,5 @@ class Evaluator:
         except Exception as e:
             print(f"Excelの保存に失敗しました: {e}")
             csv_path = save_excel_path.replace(".xlsx", ".csv")
-            df_avg.to_csv(csv_path, index=False)
+            df_sorted.to_csv(csv_path, index=False)
             print(f"代わりにCSVとして保存しました: {csv_path}")
