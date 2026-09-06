@@ -77,6 +77,9 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
     else:
         print("Skipping phoneme scan (PHONEME_P not found in config).")
 
+    # ノート位置特徴量で使用する最大ノート継続フレーム数を事前走査
+    vsqx_extractor.scan_max_note_duration(vsqx_dir)
+
     # --- WAV/VSQX ペアの収集 ---
     from collections import defaultdict
 
@@ -207,6 +210,7 @@ def build_dataset(wav_dir, vsqx_dir, output_dir):
         "target_vsqx_params": target_param_ids,
         "sr": config.SR,
         "shift_length": config.SHIFT_LENGTH,
+        "max_note_frames": int(vsqx_extractor.max_note_frames),
         # 統計データ (JSON保存用に辞書内のNumPy配列をリスト変換)
         "audio_global_mean": {
             k: (v.tolist() if isinstance(v, np.ndarray) else v)

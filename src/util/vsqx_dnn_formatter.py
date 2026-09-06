@@ -1,14 +1,72 @@
+import os
 import numpy as np
 import librosa
 from vsqx_parser import VSQXParser
 
 
 class VSQXDNNFormatter(VSQXParser):
+    def scan_max_note_duration(self, vsqx_dir):
+        """
+        全VSQXファイルを走査し、データセット内の最大ノート継続フレーム数を算出する。
+        算出値は self.max_note_frames に格納される。
+        parse_vsqx() の前に呼び出す必要がある。
+        """
+        print("Scanning all VSQX files for max note duration...")
+        max_frames = 0
+
+        for root_dir, _, files in os.walk(vsqx_dir):
+            for file in files:
+                if file.endswith(".vsqx"):
+                    vsqx_path = os.path.join(root_dir, file)
+                    try:
+                        sparse_data = self.read_sparse(vsqx_path)
+                        if sparse_data is None:
+                            continue
+
+                        tempo_map = sparse_data["tempo_map"]
+                        resolution = sparse_data["resolution"]
+
+                        for note_info in sparse_data["notes"]:
+                            start_sec = self.tick_to_second(
+                                note_info["abs_start_tick"], tempo_map, resolution
+                            )
+                            end_sec = self.tick_to_second(
+                                note_info["abs_end_tick"], tempo_map, resolution
+                            )
+                            s_idx = librosa.time_to_frames(
+                                start_sec, sr=self.sr, hop_length=self.shift_length
+                            )
+                            e_idx = librosa.time_to_frames(
+                                end_sec, sr=self.sr, hop_length=self.shift_length
+                            )
+                            n_dur = e_idx - s_idx
+                            if n_dur > max_frames:
+                                max_frames = n_dur
+
+                    except Exception as e:
+                        print(f"Warning: Could not parse {vsqx_path}. Error: {e}")
+
+        if max_frames == 0:
+            raise ValueError(
+                "max_note_frames が 0 です。"
+                "VSQXディレクトリ内にノートが1つも見つかりませんでした。"
+            )
+
+        self.max_note_frames = int(max_frames)
+        print(f"Max note duration: {self.max_note_frames} frames")
+
     def parse_vsqx(self, file_path, total_frames):
         """
         VSQXファイルからDNN入力用の密なNumPy配列を構築する。
         内部で read_sparse() を呼び出し、疎なデータを配列に変換する。
         """
+        # --- max_note_frames の事前設定チェック ---
+        if not hasattr(self, "max_note_frames") or self.max_note_frames is None:
+            raise ValueError(
+                "max_note_frames が設定されていません。"
+                "parse_vsqx() の前に scan_max_note_duration() を実行してください。"
+            )
+
         # --- Layer 1 呼び出し: 疎なデータの取得 ---
         sparse_data = self.read_sparse(file_path)
         if sparse_data is None:
@@ -76,7 +134,10 @@ class VSQXDNNFormatter(VSQXParser):
         }
         phoneme_ts = np.full(total_frames, "unknown", dtype=object)
         voicing_mask_ts = np.zeros((total_frames, 1), dtype=np.float32)
-        note_boundary_ts = np.zeros((total_frames, 2), dtype=np.float32)
+        note_elapse_ts = np.zeros(total_frames, dtype=np.float32)
+        note_remain_ts = np.zeros(total_frames, dtype=np.float32)
+        note_progress_ts = np.zeros(total_frames, dtype=np.float32)
+        note_duration_norm_ts = np.zeros(total_frames, dtype=np.float32)
         evec_id_ts = np.zeros(total_frames, dtype=np.int32)
         repeat_ts = np.zeros(total_frames, dtype=np.float32)
         static_params_ts = {
@@ -180,30 +241,13 @@ class VSQXDNNFormatter(VSQXParser):
             evec_id_ts[s_idx:e_idx] = note_info["evec_id"]
             repeat_ts[s_idx:e_idx] = note_info["repeat"]
 
-            # 5. ノート境界重み（アタック/リリースそれぞれ s_idx, e_idx を頂点とし前後20フレームで山型を形成）
-            radius = 20
-
-            # Attack (Channel 0): s_idx を中心とする山型
-            att_start = max(0, s_idx - radius)
-            att_end = min(total_frames, s_idx + radius + 1)
-            if att_start < att_end:
-                att_frames = np.arange(att_start, att_end)
-                att_dist = np.abs(att_frames - s_idx)
-                att_weights = np.maximum(0.0, 1.0 - att_dist / float(radius)).astype(np.float32)
-                note_boundary_ts[att_start:att_end, 0] = np.maximum(
-                    note_boundary_ts[att_start:att_end, 0], att_weights
-                )
-
-            # Release (Channel 1): e_idx を中心とする山型
-            rel_start = max(0, e_idx - radius)
-            rel_end = min(total_frames, e_idx + radius + 1)
-            if rel_start < rel_end:
-                rel_frames = np.arange(rel_start, rel_end)
-                rel_dist = np.abs(rel_frames - e_idx)
-                rel_weights = np.maximum(0.0, 1.0 - rel_dist / float(radius)).astype(np.float32)
-                note_boundary_ts[rel_start:rel_end, 1] = np.maximum(
-                    note_boundary_ts[rel_start:rel_end, 1], rel_weights
-                )
+            # 5. ノート位置・継続時間特徴量の計算
+            if note_frames > 0:
+                f_elapsed = np.arange(note_frames, dtype=np.float32)
+                note_elapse_ts[s_idx:e_idx] = f_elapsed / self.max_note_frames
+                note_remain_ts[s_idx:e_idx] = (note_frames - f_elapsed) / self.max_note_frames
+                note_progress_ts[s_idx:e_idx] = f_elapsed / note_frames
+                note_duration_norm_ts[s_idx:e_idx] = note_frames / self.max_note_frames
 
         # --- 動的パラメータの補間 ---
         for param_id in self.vsqx_config["DYNAMIC_PARAM_IDS"]:
@@ -232,7 +276,10 @@ class VSQXDNNFormatter(VSQXParser):
             "evec_id": evec_id_ts,
             "repeat": repeat_ts,
             "voicing_mask": voicing_mask_ts,
-            "note_boundary": note_boundary_ts,
+            "note_elapse": note_elapse_ts,
+            "note_remain": note_remain_ts,
+            "note_progress": note_progress_ts,
+            "note_duration_norm": note_duration_norm_ts,
         }
 
     def normalize_features(self, raw_data):
@@ -312,8 +359,17 @@ class VSQXDNNFormatter(VSQXParser):
         # 9. Voicing Mask（そのまま）
         flat_normalized["voicing_mask"] = raw_data["voicing_mask"]
 
-        # 10. Note Boundary Weight（そのまま）
-        if "note_boundary" in raw_data:
-            flat_normalized["NOTE_BOUNDARY"] = raw_data["note_boundary"].astype(np.float32)
+        # 10. ノート位置・継続時間特徴量（既に0.0〜1.0正規化済み、2次元化のみ）
+        _NOTE_POS_KEYS = {
+            "note_elapse": "NOTE_ELAPSE",
+            "note_remain": "NOTE_REMAIN",
+            "note_progress": "NOTE_PROGRESS",
+            "note_duration_norm": "NOTE_DURATION_NORM",
+        }
+        for raw_key, norm_key in _NOTE_POS_KEYS.items():
+            if raw_key in raw_data:
+                flat_normalized[norm_key] = raw_data[raw_key][:, np.newaxis].astype(
+                    np.float32
+                )
 
         return flat_normalized

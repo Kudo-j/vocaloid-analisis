@@ -6,7 +6,7 @@ SHIFT_LENGTH = 512
 # =============================================================================
 WAV_DIR = "./data/Step1/wav"
 VSQX_DIR = "./data/Step1/vsqx"
-OUTPUT_DIR = "./processed/Step1"
+OUTPUT_DIR = "./processed/Step1_note"
 
 # # --- テスト用設定 ---
 # WAV_DIR = "../../Testdata"
@@ -24,7 +24,7 @@ INPUT_AUDIO_PARAMS = {
 # 例1（単一結合）: {"all_inputs": ["NOTE_NUM", "PHONEME_P", "DYN", "PIT"]}
 # 例2（ブランチ）: {"branch_basic": ["NOTE_NUM", "PHONEME_P"],
 #                  "branch_voice": ["DYN", "PIT"]}
-INPUT_VSQX_PARAMS = {}
+INPUT_VSQX_PARAMS = {"note_bound": ["NOTE_ELAPSE", "NOTE_REMAIN", "NOTE_PROGRESS", "NOTE_DURATION_NORM"]}
 #INPUT_VSQX_PARAMS = {"phoneme": [ "PHONEME_P"]}
 
 # # 出力にするものを辞書で指定
