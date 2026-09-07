@@ -390,6 +390,15 @@ def main():
     if phoneme_map:
         vsqx_extractor.set_phoneme_map(phoneme_map)
 
+    # max_note_frames の復元 (features.json から設定。存在しない場合は学習スケール不整合防止のためエラー)
+    if "max_note_frames" in feature_info:
+        vsqx_extractor.max_note_frames = int(feature_info["max_note_frames"])
+    else:
+        raise ValueError(
+            "features.json に 'max_note_frames' が含まれていません。\n"
+            "学習時と推論時で正規化スケールの齟齬を防ぐため、build_dataset.py を再実行して最新の features.json を使用してください。"
+        )
+
     # A. 音響特徴量の抽出・正規化
     x_branches = {}
     total_frames = 0
@@ -540,6 +549,7 @@ def main():
         extra_features=extra_features,
         sr=sr,
         shift_length=shift_length,
+        remove_intro_silence=getattr(cfg, "REMOVE_INTRO_SILENCE", True),
     )
 
     # --- 9. VSQX への書き込み ---

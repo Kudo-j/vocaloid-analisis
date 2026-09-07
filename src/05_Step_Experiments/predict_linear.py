@@ -519,6 +519,15 @@ def main():
         preprocess_config.TARGET_PARAM_CONFIG
     )
 
+    # max_note_frames の復元 (features.json から設定。存在しない場合は学習スケール不整合防止のためエラー)
+    if "max_note_frames" in feature_info:
+        vsqx_extractor.max_note_frames = int(feature_info["max_note_frames"])
+    else:
+        raise ValueError(
+            "features.json に 'max_note_frames' が含まれていません。\n"
+            "学習時と推論時で正規化スケールの齟齬を防ぐため、build_dataset.py を再実行して最新の features.json を使用してください。"
+        )
+
     raw_vsqx = vsqx_extractor.parse_vsqx(vsqx_path, total_frames)
     if raw_vsqx is None:
         print("Error: VSQXのパースに失敗しました。")
