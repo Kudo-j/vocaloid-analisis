@@ -160,13 +160,14 @@ class Evaluator:
         extra_features=None,
         sr=44100,
         shift_length=512,
+        remove_intro_silence=True,
     ):
         """
         時系列波形をプロットして保存する。
         無音区間をグレー背景にし、時間軸を秒単位にする。
         """
         # イントロの無音削除
-        if voicing_mask is not None:
+        if remove_intro_silence and voicing_mask is not None:
             voiced_indices = np.where(voicing_mask > 0.5)[0]
             if len(voiced_indices) > 0:
                 start_idx = voiced_indices[0]
@@ -176,7 +177,7 @@ class Evaluator:
                 if extra_features is not None:
                     for k in extra_features.keys():
                         extra_features[k] = extra_features[k][start_idx:]
-        else:
+        elif voicing_mask is None:
             voicing_mask = np.ones(y_true.shape[0], dtype=np.float32)
 
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -375,13 +376,16 @@ class Evaluator:
             summary_header = ["指標名", "データ名"] + numeric_cols
             summary_rows = [
                 ["平均値 (Mean)", ""] + [df_sorted[c].mean() for c in numeric_cols],
-                ["中央値 (Median)", median_song] + [df_sorted[c].median() for c in numeric_cols],
+                ["中央値 (Median)", median_song]
+                + [df_sorted[c].median() for c in numeric_cols],
                 ["最大値 (Max)", max_song] + [df_sorted[c].max() for c in numeric_cols],
                 ["最小値 (Min)", min_song] + [df_sorted[c].min() for c in numeric_cols],
             ]
 
             # ヘッダー書き込み
-            header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            header_fill = PatternFill(
+                start_color="4472C4", end_color="4472C4", fill_type="solid"
+            )
             header_font = Font(bold=True, color="FFFFFF")
             for col_idx, val in enumerate(summary_header, 1):
                 cell = ws.cell(row=1, column=col_idx, value=val)
@@ -389,9 +393,15 @@ class Evaluator:
                 cell.font = header_font
 
             # 定義: 中央値・最大値・最小値用のソフトカラー背景
-            fill_median = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # 淡い黄
-            fill_max = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")     # 淡い赤
-            fill_min = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")     # 淡い緑
+            fill_median = PatternFill(
+                start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"
+            )  # 淡い黄
+            fill_max = PatternFill(
+                start_color="FCE4D6", end_color="FCE4D6", fill_type="solid"
+            )  # 淡い赤
+            fill_min = PatternFill(
+                start_color="E2EFDA", end_color="E2EFDA", fill_type="solid"
+            )  # 淡い緑
 
             # データ行書き込み＆各指標に応じた行の色付け
             summary_row_fills = [None, fill_median, fill_max, fill_min]

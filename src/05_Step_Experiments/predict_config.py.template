@@ -42,6 +42,9 @@ TRAIN_SETTINGS_PATH = os.path.join(BASE_DIR, "train_settings.json")
 # --- 出力先 ---
 OUTPUT_DIR = os.path.join(BASE_DIR, "output", "predict")
 
+# --- グラフ描画設定 ---
+REMOVE_INTRO_SILENCE = True  # イントロの無音区間をカットしてプロットするかどうか (Falseでカットしない)
+
 # --- チャンク推論設定 (スライディングウィンドウ・オーバーラップ加算平均) ---
 CHUNK_SIZE = 600  # 1回の推論フレーム数 (dataset.py の CHUNK_SIZE と合わせる)
 CHUNK_HOP = 300  # シフト幅 (dataset.py の CHUNK_HOP と合わせる)
