@@ -76,7 +76,10 @@ def main():
 
     sr = feature_info.get("sr", 44100)
     shift_length = feature_info.get("shift_length", 512)
+    x_feature_map = feature_info.get("x_feature_map", {})
     y_feature_map = feature_info.get("y_feature_map", {})
+    audio_global_mean = feature_info.get("audio_global_mean", {})
+    audio_global_std = feature_info.get("audio_global_std", {})
 
     target_param_names = []
     for branch_name, feat_list in y_feature_map.items():
@@ -137,19 +140,56 @@ def main():
     gt_rms = audio_extractor.get_features(gt_wav_path, ["rms"])
     pred_rms = audio_extractor.get_features(pred_wav_path, ["rms"])
 
-    if gt_rms.ndim > 1:
-        gt_rms = gt_rms[:, 0]
-    if pred_rms.ndim > 1:
-        pred_rms = pred_rms[:, 0]
-
     min_frames = min(len(gt_rms), len(pred_rms))
     gt_rms = gt_rms[:min_frames]
     pred_rms = pred_rms[:min_frames]
 
+    # x_feature_map から "rms" を含む branch_name を検索
+    rms_branch_name = None
+    for b_name, feat_list in x_feature_map.items():
+        feat_names = [f["name"] if isinstance(f, dict) else f for f in feat_list]
+        if "rms" in feat_names:
+            rms_branch_name = b_name
+            break
+
+    # 指定コードと同一のキー参照および標準化計算
+    if rms_branch_name and rms_branch_name in audio_global_mean:
+        mean = np.array(audio_global_mean[rms_branch_name])
+        std = np.array(audio_global_std[rms_branch_name])
+    else:
+        mean = np.array(audio_global_mean.get("rms", 0.0))
+        std = np.array(audio_global_std.get("rms", 1.0))
+
+    gt_rms_norm = (gt_rms - mean) / (std + 1e-7)
+    gt_rms_norm = np.nan_to_num(gt_rms_norm).astype(np.float32)
+
+    pred_rms_norm = (pred_rms - mean) / (std + 1e-7)
+    pred_rms_norm = np.nan_to_num(pred_rms_norm).astype(np.float32)
+
+    if gt_rms_norm.ndim > 1:
+        gt_rms_norm = gt_rms_norm[:, 0]
+    if pred_rms_norm.ndim > 1:
+        pred_rms_norm = pred_rms_norm[:, 0]
+
     # --- 4. DYN等のパラメータ抽出 (正解VSQX vs 予測VSQX) ---
     print("VSQXデータからパラメータを抽出中...")
     vsqx_extractor = VSQXDNNFormatter(sr=sr, shift_length=shift_length)
-    vsqx_extractor.vsqx_config["TARGET_PARAM_CONFIG"] = y_feature_map
+
+    # y_feature_map からパラメータ名（文字列）のみを抽出した辞書を作成して渡す
+    target_param_config = {
+        branch: [feat["name"] if isinstance(feat, dict) else feat for feat in feat_list]
+        for branch, feat_list in y_feature_map.items()
+    }
+    vsqx_extractor.vsqx_config["TARGET_PARAM_CONFIG"] = target_param_config
+
+    # max_note_frames の復元 (features.json から設定。存在しない場合は学習スケール不整合防止のためエラー)
+    if "max_note_frames" in feature_info:
+        vsqx_extractor.max_note_frames = int(feature_info["max_note_frames"])
+    else:
+        raise ValueError(
+            "features.json に 'max_note_frames' が含まれていません。\n"
+            "学習時と評価時で正規化スケールの齟齬を防ぐため、build_dataset.py を再実行して最新の features.json を使用してください。"
+        )
 
     gt_vsqx_raw = vsqx_extractor.parse_vsqx(gt_vsqx_path, min_frames)
     pred_vsqx_raw = vsqx_extractor.parse_vsqx(pred_vsqx_path, min_frames)
@@ -213,7 +253,7 @@ def main():
     ax_rms = axes[num_params]
 
     voiced_idx = v_mask > 0.5
-    rms_mae = np.mean(np.abs(gt_rms[voiced_idx] - pred_rms[voiced_idx])) if np.any(voiced_idx) else 0.0
+    rms_mae = np.mean(np.abs(gt_rms_norm[voiced_idx] - pred_rms_norm[voiced_idx])) if np.any(voiced_idx) else 0.0
 
     in_unvoiced = False
     start_t = 0.0
@@ -227,12 +267,12 @@ def main():
     if in_unvoiced:
         ax_rms.axvspan(start_t, time_axis[-1], alpha=0.18, color="#9E9E9E")
 
-    ax_rms.plot(time_axis, gt_rms, label="正解 WAV RMS", color="steelblue", linewidth=1.5)
-    ax_rms.plot(time_axis, pred_rms, label="予測 WAV RMS", color="coral", linewidth=1.5, linestyle="--")
+    ax_rms.plot(time_axis, gt_rms_norm, label="正解 WAV RMS (標準化)", color="steelblue", linewidth=1.5)
+    ax_rms.plot(time_axis, pred_rms_norm, label="予測 WAV RMS (標準化)", color="coral", linewidth=1.5, linestyle="--")
 
-    ax_rms.set_title(f"RMS 音響特徴量比較 (レンダリング結果): {cfg.INPUT_FILE_NAME}  |  MAE = {rms_mae:.4f}")
+    ax_rms.set_title(f"RMS 音響特徴量比較 (標準化): {cfg.INPUT_FILE_NAME}  |  MAE = {rms_mae:.4f}")
     ax_rms.set_xlabel("時間 (秒)")
-    ax_rms.set_ylabel("RMS (Linear Scale)")
+    ax_rms.set_ylabel("RMS (Z-score)")
     ax_rms.legend(loc="upper right")
     ax_rms.grid(True, alpha=0.3)
 

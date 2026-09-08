@@ -592,7 +592,7 @@ def evaluate_model(custom_config=None, model_load_path=None):
                     seq_len = len_batch[b_idx].item()
                     s = starts[b_idx].item()
                     e = ends[b_idx].item()
-                    
+
                     # 実際の長さとseq_lenが一致するはずですが、念のためスライス
                     actual_len = min(seq_len, e - s)
                     e = s + actual_len
@@ -605,7 +605,7 @@ def evaluate_model(custom_config=None, model_load_path=None):
 
                     # 正解データや追加特徴量は重なり部分で同じ値なので上書きでよい
                     y_true_full[s:e] = y_true_seq
-                    
+
                     # 予測値とマスクは加算して最後に平均をとる
                     y_pred_full[s:e] += y_pred_seq
                     v_mask_full[s:e] += v_mask_seq
@@ -632,7 +632,7 @@ def evaluate_model(custom_config=None, model_load_path=None):
                 voicing_mask=v_mask_full,
             )
 
-            if i < 5:
+            if i < 11:
                 wave_path = os.path.join(TEST_EVAL_DIR, f"waveform_{song_name}.png")
                 shift_length = feature_info.get("shift_length", 512)
                 sr = feature_info.get("sr", 44100)

@@ -80,11 +80,15 @@ def _build_model(model_type, input_dim, output_dim, model_params):
         "cnn_bilstm": CNNBiLSTM,
         "bilstm_base": BiLSTMBase,
     }
-    base_type = model_type.split("_trial_")[0] if "_trial_" in model_type else model_type
+    base_type = (
+        model_type.split("_trial_")[0] if "_trial_" in model_type else model_type
+    )
     if base_type not in model_registry:
         raise ValueError(f"未知のモデル種別: {base_type}")
     params = model_params.get(base_type, {})
-    return model_registry[base_type](input_dim=input_dim, output_dim=output_dim, **params)
+    return model_registry[base_type](
+        input_dim=input_dim, output_dim=output_dim, **params
+    )
 
 
 def denormalize_to_int(norm_val, param_id, vsqx_config):
@@ -114,9 +118,7 @@ def denormalize_to_int(norm_val, param_id, vsqx_config):
 
 # --- 正規表現パターン (VSQX テキストベース書き込み用) ---
 RE_RESOLUTION = re.compile(r"<resolution>(\d+)</resolution>")
-RE_TEMPO_V = re.compile(
-    r"<tempo>\s*<t>0</t>\s*<v>(\d+)</v>\s*</tempo>", re.DOTALL
-)
+RE_TEMPO_V = re.compile(r"<tempo>\s*<t>0</t>\s*<v>(\d+)</v>\s*</tempo>", re.DOTALL)
 RE_VS_PART = re.compile(r"<vsPart>.*?</vsPart>", re.DOTALL)
 RE_PART_T = re.compile(r"<vsPart>\s*<t>(\d+)</t>")
 RE_SINGER = re.compile(r"(<singer>.*?</singer>)", re.DOTALL)
@@ -124,7 +126,9 @@ RE_CC_TAG = re.compile(r'<cc>.*?<v id="([A-Z]+)">.*?</cc>', re.DOTALL)
 RE_NOTE = re.compile(r"<note>.*?</note>", re.DOTALL)
 
 
-def update_vsqx_xml(vsqx_path, output_path, predictions_int, sr, shift_length, vsqx_config):
+def update_vsqx_xml(
+    vsqx_path, output_path, predictions_int, sr, shift_length, vsqx_config
+):
     """
     テキストベース（正規表現）で VSQX ファイルを書き換える関数。
     predict_en.py の update_vsqx_xml を移植したもの。
@@ -248,6 +252,7 @@ def update_vsqx_xml(vsqx_path, output_path, predictions_int, sr, shift_length, v
     except Exception as e:
         print(f"  Error writing VSQX: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -276,16 +281,22 @@ def main():
 
     print(f"VSQX検索中: {os.path.abspath(cfg.VSQX_SEARCH_DIR)}")
     try:
-        vsqx_path = find_file_recursive(cfg.VSQX_SEARCH_DIR, cfg.INPUT_FILE_NAME, ".vsqx")
+        vsqx_path = find_file_recursive(
+            cfg.VSQX_SEARCH_DIR, cfg.INPUT_FILE_NAME, ".vsqx"
+        )
     except (FileNotFoundError, ValueError) as e:
         errors.append(str(e))
 
     if not os.path.exists(cfg.MODEL_PATH):
         errors.append(f"Model file not found: {os.path.abspath(cfg.MODEL_PATH)}")
     if not os.path.exists(cfg.FEATURES_JSON_PATH):
-        errors.append(f"features.json not found: {os.path.abspath(cfg.FEATURES_JSON_PATH)}")
+        errors.append(
+            f"features.json not found: {os.path.abspath(cfg.FEATURES_JSON_PATH)}"
+        )
     if not os.path.exists(cfg.TRAIN_SETTINGS_PATH):
-        errors.append(f"train_settings.json not found: {os.path.abspath(cfg.TRAIN_SETTINGS_PATH)}")
+        errors.append(
+            f"train_settings.json not found: {os.path.abspath(cfg.TRAIN_SETTINGS_PATH)}"
+        )
 
     if errors:
         print("\n" + "=" * 60)
@@ -368,10 +379,26 @@ def main():
         feature_names = [f["name"] for f in feat_list]
         # 音響特徴量ではないブランチ = VSQXパラメータブランチ
         is_audio = any(
-            ft in ["rms", "mel", "mfcc", "cqt", "stft", "f0_world", "f0_crepe",
-                    "source_rms", "source_mel", "source_stft", "hnr",
-                    "spectral_centroid", "spectral_bandwidth", "spectral_contrast",
-                    "zero_crossing_rate", "cepstrum", "smoothed_cepstrum"]
+            ft
+            in [
+                "rms",
+                "mel",
+                "mfcc",
+                "cqt",
+                "stft",
+                "f0_world",
+                "f0_crepe",
+                "source_rms",
+                "source_mel",
+                "source_stft",
+                "hnr",
+                "spectral_centroid",
+                "spectral_bandwidth",
+                "spectral_contrast",
+                "zero_crossing_rate",
+                "cepstrum",
+                "smoothed_cepstrum",
+            ]
             for ft in feature_names
         )
         if not is_audio:
@@ -390,7 +417,7 @@ def main():
     if phoneme_map:
         vsqx_extractor.set_phoneme_map(phoneme_map)
 
-    # max_note_frames の復元 (features.json から設定。存在しない場合は学習スケール不整合防止のためエラー)
+    # max_note_frames の復元 (features.json から設定、無ければスキャン)
     if "max_note_frames" in feature_info:
         vsqx_extractor.max_note_frames = int(feature_info["max_note_frames"])
     else:
@@ -408,10 +435,26 @@ def main():
 
         # 音響特徴量かどうかの判定
         is_audio = any(
-            ft in ["rms", "mel", "mfcc", "cqt", "stft", "f0_world", "f0_crepe",
-                    "source_rms", "source_mel", "source_stft", "hnr",
-                    "spectral_centroid", "spectral_bandwidth", "spectral_contrast",
-                    "zero_crossing_rate", "cepstrum", "smoothed_cepstrum"]
+            ft
+            in [
+                "rms",
+                "mel",
+                "mfcc",
+                "cqt",
+                "stft",
+                "f0_world",
+                "f0_crepe",
+                "source_rms",
+                "source_mel",
+                "source_stft",
+                "hnr",
+                "spectral_centroid",
+                "spectral_bandwidth",
+                "spectral_contrast",
+                "zero_crossing_rate",
+                "cepstrum",
+                "smoothed_cepstrum",
+            ]
             for ft in feature_names
         )
 
@@ -458,7 +501,9 @@ def main():
             print(f"  {branch_name}: {p_list} -> shape {branch_arr.shape}")
 
     # --- 6. スライディングウィンドウ (Overlap-Add) 推論 ---
-    print(f"\n推論実行中... (frames={total_frames}, chunk={cfg.CHUNK_SIZE}, hop={cfg.CHUNK_HOP})")
+    print(
+        f"\n推論実行中... (frames={total_frames}, chunk={cfg.CHUNK_SIZE}, hop={cfg.CHUNK_HOP})"
+    )
 
     pred_sum = np.zeros((total_frames, total_y_dim), dtype=np.float32)
     count_map = np.zeros((total_frames, 1), dtype=np.float32)
@@ -480,10 +525,11 @@ def main():
                 x_chunk[k] = v[:, start:end, :].to(device)
 
             from torch.cuda.amp import autocast
+
             with autocast(enabled=(device_type == "cuda")):
                 output = model(x_chunk)
 
-            out_np = output[0, :end - start].cpu().numpy()
+            out_np = output[0, : end - start].cpu().numpy()
             pred_sum[start:end] += out_np
             count_map[start:end, 0] += 1.0
 
@@ -508,7 +554,7 @@ def main():
             if gt is not None:
                 if gt.ndim == 1:
                     gt = gt[:, np.newaxis]
-                y_true_full[:, col_idx:col_idx + dim] = gt[:total_frames, :dim]
+                y_true_full[:, col_idx : col_idx + dim] = gt[:total_frames, :dim]
             col_idx += dim
 
     # --- 8. Evaluator を使ったプロット ---
@@ -527,8 +573,7 @@ def main():
     for branch_name, feat_list in x_feature_map.items():
         feature_names = [f["name"] for f in feat_list]
         is_audio = any(
-            ft in ["rms", "mel", "mfcc", "cqt", "stft"]
-            for ft in feature_names
+            ft in ["rms", "mel", "mfcc", "cqt", "stft"] for ft in feature_names
         )
         if is_audio and branch_name in x_branches:
             feat_data = x_branches[branch_name]
@@ -575,7 +620,11 @@ def main():
         cfg.OUTPUT_DIR, f"{cfg.INPUT_FILE_NAME}_predict.vsqx"
     )
     update_vsqx_xml(
-        vsqx_path, vsqx_output_path, predictions_int, sr, shift_length,
+        vsqx_path,
+        vsqx_output_path,
+        predictions_int,
+        sr,
+        shift_length,
         vsqx_extractor.vsqx_config,
     )
 
