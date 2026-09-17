@@ -43,7 +43,7 @@ from models.cnn_bilstm import CNNBiLSTM
 from models.bilstm_base import BiLSTMBase
 from models.fusion_block import FeatureFusionBlock
 from models.unified_model import UnifiedModel
-from train_util.inference import run_sliding_window_inference
+from train_util.inference import eval_song
 
 # 設定の読み込み
 import predict_config as cfg
@@ -349,7 +349,6 @@ def main():
 
     # --- 4. モデルの構築とロード ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device_type = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"\nUsing device: {device}")
 
     fusion_block = FeatureFusionBlock(
@@ -484,7 +483,6 @@ def main():
     voicing_mask = norm_vsqx.get(
         "voicing_mask", np.ones((total_frames, 1), dtype=np.float32)
     )
-    v_mask = voicing_mask.squeeze(-1) if voicing_mask.ndim > 1 else voicing_mask
 
     # VSQXの入力パラメータブランチを構築
     for branch_name, p_list in input_vsqx_params_dict.items():
@@ -501,36 +499,10 @@ def main():
             x_branches[branch_name] = branch_arr
             print(f"  {branch_name}: {p_list} -> shape {branch_arr.shape}")
 
-    # --- 6. スライディングウィンドウ (Overlap-Add) 推論 ---
-    print(
-        f"\n推論実行中... (frames={total_frames}, chunk={cfg.CHUNK_SIZE}, hop={cfg.CHUNK_HOP})"
-    )
-
-    # 推論用にテンソルを準備
-    x_tensors = {k: torch.from_numpy(v).unsqueeze(0) for k, v in x_branches.items()}
-
-    # 共有ユーティリティで加重オーバーラップ加算推論を実行
-    y_pred_full = run_sliding_window_inference(
-        model=model,
-        x_tensors=x_tensors,
-        total_frames=total_frames,
-        chunk_size=cfg.CHUNK_SIZE,
-        chunk_hop=cfg.CHUNK_HOP,
-        device=device,
-        device_type=device_type,
-        offset=0.1,
-    )
-
-    # downstream が pred_sum を期待しているので代入
-    pred_sum = y_pred_full
-
-    print("  推論完了")
-    print("  推論完了: 完了")
-
-    # --- 7. 正解値の取得 ---
-    y_true_full = np.zeros((total_frames, total_y_dim), dtype=np.float32)
-    col_idx = 0
+    # --- 6. 正解データの構築（NPZ互換ブランチ辞書形式） ---
+    y_dict = {}
     for branch_name, feat_list in y_feature_map.items():
+        branch_data_list = []
         for feat in feat_list:
             pid = feat["name"]
             dim = feat["dim"]
@@ -538,21 +510,13 @@ def main():
             if gt is not None:
                 if gt.ndim == 1:
                     gt = gt[:, np.newaxis]
-                y_true_full[:, col_idx : col_idx + dim] = gt[:total_frames, :dim]
-            col_idx += dim
+                branch_data_list.append(gt[:total_frames, :dim])
+        if branch_data_list:
+            y_dict[branch_name] = np.concatenate(
+                branch_data_list, axis=-1
+            ).astype(np.float32)
 
-    # --- 8. Evaluator を使ったプロット ---
-    print("\n比較グラフを描画中...")
-    evaluator = Evaluator(device=device)
-    evaluator.add_song_result(
-        cfg.INPUT_FILE_NAME,
-        y_true_full,
-        y_pred_full,
-        y_param_names,
-        voicing_mask=v_mask,
-    )
-
-    # RMS等の追加特徴量 (x_branches の音響ブランチの先頭次元)
+    # 追加特徴量（波形プロット用）
     extra_features = {}
     for branch_name, feat_list in x_feature_map.items():
         feature_names = [f["name"] for f in feat_list]
@@ -567,21 +531,38 @@ def main():
             display_name = feature_names[0].upper()
             extra_features[display_name] = feat_data
 
+    # オンメモリ辞書の構築（NPZと同一構造）
+    song_data = {
+        "x": x_branches,
+        "y": y_dict,
+        "voicing_mask": voicing_mask,
+        "extra_features": extra_features if extra_features else None,
+    }
+
+    # --- 7. 推論・評価（共通関数 eval_song） ---
+    print(
+        f"\n推論実行中... (frames={total_frames}, chunk={cfg.CHUNK_SIZE}, hop={cfg.CHUNK_HOP})"
+    )
     wave_path = os.path.join(cfg.OUTPUT_DIR, f"waveform_{cfg.INPUT_FILE_NAME}.png")
-    evaluator.plot_waveform(
-        cfg.INPUT_FILE_NAME,
-        y_true_full,
-        y_pred_full,
-        wave_path,
-        y_param_names,
-        voicing_mask=v_mask,
-        extra_features=extra_features,
+    evaluator = Evaluator(device=device)
+
+    y_pred_full, _ = eval_song(
+        model=model,
+        song_data=song_data,
+        song_name=cfg.INPUT_FILE_NAME,
+        evaluator=evaluator,
+        y_param_names=y_param_names,
+        save_wave_path=wave_path,
+        chunk_size=cfg.CHUNK_SIZE,
+        chunk_hop=cfg.CHUNK_HOP,
+        device=device,
         sr=sr,
         shift_length=shift_length,
         remove_intro_silence=getattr(cfg, "REMOVE_INTRO_SILENCE", True),
     )
+    print("  推論完了")
 
-    # --- 9. VSQX への書き込み ---
+    # --- 8. VSQX への書き込み ---
     print("\nVSQX書き込み中...")
 
     # 予測値を整数化

@@ -28,11 +28,13 @@ import numpy as np
 # util フォルダをインポートパスに追加
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "util"))
 
-from train_util.dataset import VocalDataset, create_datasets, collate_fn
+from train_util.dataset import (
+    VocalDataset, create_datasets, collate_fn, _load_npz_safe, CHUNK_SIZE, CHUNK_HOP,
+)
 from train_util.losses import build_loss, create_mask
 from train_util.early_stopping import EarlyStopping
 from train_util.evaluate import Evaluator
-from train_util.inference import _get_window, weighted_overlap_add
+from train_util.inference import eval_song
 from plot_util.plot import save_loss_plot
 
 # モデル
@@ -564,98 +566,46 @@ def evaluate_model(custom_config=None, model_load_path=None):
     test_files_unique = list(dict.fromkeys([c[0] for c in test_dataset.chunk_map]))
 
     for i, song_name in enumerate(test_files_unique):
-        ds = VocalDataset(DATA_DIR, [song_name], feature_info, mode="eval_full")
-        if len(ds) == 0:
+        npz_path = os.path.join(DATA_DIR, f"{song_name}.npz")
+        if not os.path.exists(npz_path):
             continue
-        dl = DataLoader(ds, batch_size=32, shuffle=False, collate_fn=collate_fn)
+        x_dict, y_dict, voicing_mask = _load_npz_safe(npz_path)
+        if x_dict is None:
+            continue
 
-        total_len = feature_info["file_lengths"][song_name]
-        y_true_full = np.zeros((total_len, total_y_dim), dtype=np.float32)
-        y_pred_full = np.zeros((total_len, total_y_dim), dtype=np.float32)
-        v_mask_full = np.zeros(total_len, dtype=np.float32)
-        overlap_count = np.zeros((total_len, 1), dtype=np.float32)
+        # 追加特徴量の取得（波形プロット用）
+        extra_features = {}
+        for branch_key, display_name in PLOT_EXTRA_FEATURES.items():
+            if branch_key in x_dict:
+                feat_data = x_dict[branch_key]
+                if feat_data.ndim > 1:
+                    feat_data = feat_data[:, 0]
+                extra_features[display_name] = feat_data
 
-        extra_features_full = {
-            feat_name: np.zeros(total_len, dtype=np.float32)
-            for feat_name in PLOT_EXTRA_FEATURES.values()
+        song_data = {
+            "x": x_dict,
+            "y": y_dict,
+            "voicing_mask": voicing_mask,
+            "extra_features": extra_features if extra_features else None,
         }
 
-        with torch.no_grad():
-            for batch in dl:
-                x_dict, y_dict, mask_batch, len_batch, starts, ends = batch
-                x_dict_device = {k: v.to(device) for k, v in x_dict.items()}
-                y_batch = _concat_branch_tensors(y_dict, device)
-                mask_batch = mask_batch.to(device)
-                len_batch = len_batch.to(device)
+        save_wave_path = None
+        if i < 11:
+            save_wave_path = os.path.join(TEST_EVAL_DIR, f"waveform_{song_name}.png")
 
-                with autocast(enabled=(device_type == "cuda")):
-                    output = model(x_dict_device)
-
-                for b_idx in range(len(len_batch)):
-                    seq_len = len_batch[b_idx].item()
-                    s = starts[b_idx].item()
-                    e = ends[b_idx].item()
-
-                    # 実際の長さとseq_lenが一致するはずですが、念のためスライス
-                    actual_len = min(seq_len, e - s)
-                    if actual_len <= 0:
-                        continue
-                    e = s + actual_len
-
-                    y_true_seq = y_batch[b_idx, :actual_len].cpu().numpy()
-                    y_pred_seq = output[b_idx, :actual_len].cpu().numpy()
-                    v_mask_seq = mask_batch[b_idx, :actual_len].cpu().numpy()
-                    if v_mask_seq.ndim > 1:
-                        v_mask_seq = np.squeeze(v_mask_seq, axis=-1)
-
-                    # 正解データや追加特徴量は重なり部分で同じ値なので上書きでよい
-                    y_true_full[s:e] = y_true_seq
-
-                    # 予測値の加重オーバーラップ加算（inference.py の共通関数を利用）
-                    y_pred_full, overlap_count = weighted_overlap_add(
-                        y_pred_full, overlap_count, s, e, y_pred_seq, offset=0.1
-                    )
-
-                    # マスクも同様に窓重み付きで加算
-                    w = _get_window(actual_len, offset=0.1)
-                    v_mask_full[s:e] += v_mask_seq * w
-
-                    for k, feat_name in PLOT_EXTRA_FEATURES.items():
-                        if k in x_dict:
-                            feat_arr = x_dict[k][b_idx, :actual_len].cpu().numpy()
-                            if feat_arr.ndim > 1:
-                                feat_arr = feat_arr[:, 0]
-                            extra_features_full[feat_name][s:e] = feat_arr
-
-        # オーバーラップ部分の平均をとる
-        valid_idx = overlap_count[:, 0] > 0
-        y_pred_full[valid_idx] /= overlap_count[valid_idx]
-        v_mask_full[valid_idx] /= overlap_count[valid_idx, 0]
-
-        if np.any(valid_idx):
-            evaluator.add_song_result(
-                song_name,
-                y_true_full,
-                y_pred_full,
-                y_param_names,
-                voicing_mask=v_mask_full,
-            )
-
-            if i < 11:
-                wave_path = os.path.join(TEST_EVAL_DIR, f"waveform_{song_name}.png")
-                shift_length = feature_info.get("shift_length", 512)
-                sr = feature_info.get("sr", 44100)
-                evaluator.plot_waveform(
-                    song_name,
-                    y_true_full,
-                    y_pred_full,
-                    wave_path,
-                    y_param_names,
-                    voicing_mask=v_mask_full,
-                    extra_features=extra_features_full,
-                    sr=sr,
-                    shift_length=shift_length,
-                )
+        eval_song(
+            model=model,
+            song_data=song_data,
+            song_name=song_name,
+            evaluator=evaluator,
+            y_param_names=y_param_names,
+            save_wave_path=save_wave_path,
+            chunk_size=CHUNK_SIZE,
+            chunk_hop=CHUNK_HOP,
+            device=device,
+            sr=feature_info.get("sr", 44100),
+            shift_length=feature_info.get("shift_length", 512),
+        )
 
     evaluator.plot_scatter(TEST_EVAL_DIR, EXPERIMENT_NAME, y_param_names)
     excel_path = os.path.join(TEST_EVAL_DIR, f"{EXPERIMENT_NAME}_eval.xlsx")
