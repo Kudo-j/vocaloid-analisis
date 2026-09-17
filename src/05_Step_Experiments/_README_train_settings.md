@@ -34,6 +34,16 @@
 ### MODEL_PARAMS (モデル固有ハイパーパラメータ)
 各 `MODEL_TYPE` に応じた内部パラメータを指定する辞書である。
 
+#### `cnn_bilstm` の主要パラメータ
+*   `num_conv_layers`: 前段に配置する1次元CNN（ConvBlock）の積層数（デフォルト: 1）。多層化することで受容野（Receptive Field）を拡大できる。
+*   `conv_channels`: 1次元CNNの出力チャンネル数（デフォルト: 64）。
+*   `kernel_size`: 1次元CNNのカーネルサイズ（デフォルト: 9または19）。
+*   `hidden_dim`: Bi-LSTM の隠れ層次元数（デフォルト: 64）。
+*   `num_layers`: Bi-LSTM の積層数（デフォルト: 1）。
+*   `dropout`: Bi-LSTM / Attention のドロップアウト率（デフォルト: 0.3）。
+*   `use_attention`: MultiheadAttention 層を挿入するかどうかのフラグ（`true` / `false`）。
+*   `num_heads`: MultiheadAttention のヘッド数。
+
 #### `lstm_base` の主要パラメータ
 *   `direction`: LSTMの処理方向を指定する。
     *   `"forward"`: 順方向処理（過去から未来へ向けて時系列を処理）。
@@ -43,4 +53,5 @@
 *   `dropout`: LSTM層間のドロップアウト率（`num_layers > 1` の場合に適用）。
 *   `use_attention`: MultiheadAttention 層を挿入するかどうかのフラグ（`true` / `false`）。
 *   `num_heads`: MultiheadAttention のヘッド数（`hidden_dim` がこの値で割り切れる必要がある）。
+
 

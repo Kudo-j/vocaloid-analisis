@@ -56,6 +56,7 @@ class CNNBiLSTM(nn.Module):
         output_dim,
         conv_channels=64,
         kernel_size=9,
+        num_conv_layers=1,
         hidden_dim=64,
         num_layers=1,
         dropout=0.3,
@@ -71,13 +72,24 @@ class CNNBiLSTM(nn.Module):
         # padding を (kernel_size - 1) // 2 にすることで、
         # 入力と出力の時間長を同一に保つ (same padding)
         padding = (kernel_size - 1) // 2
-        self.conv_block = nn.Sequential(
-            nn.Conv1d(
-                input_dim, conv_channels, kernel_size, padding=padding, padding_mode='reflect', bias=False
-            ),
-            nn.BatchNorm1d(conv_channels),
-            nn.ReLU(),
-        )
+        conv_layers_list = []
+        for i in range(num_conv_layers):
+            in_channels = input_dim if i == 0 else conv_channels
+            conv_layers_list.extend(
+                [
+                    nn.Conv1d(
+                        in_channels,
+                        conv_channels,
+                        kernel_size,
+                        padding=padding,
+                        padding_mode="reflect",
+                        bias=False,
+                    ),
+                    nn.BatchNorm1d(conv_channels),
+                    nn.ReLU(),
+                ]
+            )
+        self.conv_block = nn.Sequential(*conv_layers_list)
 
         # --- Bi-LSTM ---
         self.lstm = nn.LSTM(
@@ -134,4 +146,29 @@ class CNNBiLSTM(nn.Module):
         x = self.output_activation(x)  # (B, S, output_dim)
 
         return x
+
+
+if __name__ == "__main__":
+    print("=== CNNBiLSTM 動作確認テスト ===")
+    dummy_input = torch.randn(2, 100, 32)  # (Batch=2, Seq=100, Dim=32)
+    print(f"入力テンソル形状: {dummy_input.shape}")
+
+    for layers in [1, 2, 3]:
+        model = CNNBiLSTM(
+            input_dim=32,
+            output_dim=3,
+            conv_channels=64,
+            kernel_size=19,
+            num_conv_layers=layers,
+            hidden_dim=64,
+            num_layers=1,
+        )
+        model.eval()
+        with torch.no_grad():
+            out = model(dummy_input)
+        print(f"num_conv_layers={layers} 出力テンソル形状: {out.shape}")
+        assert out.shape == (2, 100, 3), f"num_conv_layers={layers} の出力形状が不正です"
+
+    print("すべての動作テストが正常に完了しました。")
+
 

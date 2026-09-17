@@ -23,6 +23,7 @@
     "TEST_RATIO": 0.2,
     "MODEL_PARAMS": {
         "cnn_bilstm": {
+            "num_conv_layers": 1,
             "conv_channels": 64,
             "kernel_size": 19,
             "hidden_dim": 64,
