@@ -37,6 +37,14 @@
             "dropout": 0.3,
             "use_attention": true,
             "num_heads": 4
+        },
+        "lstm_base": {
+            "hidden_dim": 64,
+            "num_layers": 1,
+            "dropout": 0.3,
+            "direction": "forward",
+            "use_attention": true,
+            "num_heads": 4
         }
     }
 }

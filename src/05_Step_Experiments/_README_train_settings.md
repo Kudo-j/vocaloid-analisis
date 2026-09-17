@@ -13,6 +13,7 @@
 ネットワークのコアとなるモデルアーキテクチャを指定する。
 *   `"bilstm_base"`: シンプルな双方向LSTMモデル。
 *   `"cnn_bilstm"`: 音声特徴の局所的なパターンを捉えるための1次元CNN層を前段に配置し、その後ろに双方向LSTMを接続したハイブリッドモデル。
+*   `"lstm_base"`: 単方向LSTMモデル。順方向または逆方向の文脈を単独で学習・検証するためのモデルである。CNNや入力線形層を通さず、入力特徴量を直接単方向LSTMに入力する。方向の指定は `MODEL_PARAMS` の `direction` で行う。
 
 ### FUSION_STRATEGY (ブランチ結合戦略)
 `build_dataset.py` で定義した複数の入力ブランチ（例: `audio_rms`, `phoneme`）をどのように1つにまとめるかを指定する。
@@ -29,3 +30,17 @@
 *   `"lstm"`: 単層のLSTMを通す。
 
 ※ `FUSION_STRATEGY` が `"pass_through"` の場合でも、エラー防止のために存在する入力ブランチ名はすべてこの辞書に定義し、値は `"none"` としておくことが推奨される。
+
+### MODEL_PARAMS (モデル固有ハイパーパラメータ)
+各 `MODEL_TYPE` に応じた内部パラメータを指定する辞書である。
+
+#### `lstm_base` の主要パラメータ
+*   `direction`: LSTMの処理方向を指定する。
+    *   `"forward"`: 順方向処理（過去から未来へ向けて時系列を処理）。
+    *   `"backward"`: 逆方向処理（未来から過去へ向けて時系列を処理）。モデル内部で時間軸を自動反転して処理するため、外部データの反転処理は不要である。
+*   `hidden_dim`: LSTMの隠れ層次元数（デフォルト: 64）。
+*   `num_layers`: LSTMの積層数（デフォルト: 1）。
+*   `dropout`: LSTM層間のドロップアウト率（`num_layers > 1` の場合に適用）。
+*   `use_attention`: MultiheadAttention 層を挿入するかどうかのフラグ（`true` / `false`）。
+*   `num_heads`: MultiheadAttention のヘッド数（`hidden_dim` がこの値で割り切れる必要がある）。
+

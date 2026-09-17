@@ -37,6 +37,7 @@ from plot_util.plot import save_loss_plot
 # モデル
 from models.cnn_bilstm import CNNBiLSTM
 from models.bilstm_base import BiLSTMBase
+from models.lstm_base import LSTMBase
 from models.fusion_block import FeatureFusionBlock
 from models.unified_model import UnifiedModel
 
@@ -66,6 +67,7 @@ def _build_model(model_type, input_dim, output_dim, model_params):
     model_registry = {
         "cnn_bilstm": CNNBiLSTM,
         "bilstm_base": BiLSTMBase,
+        "lstm_base": LSTMBase,
     }
 
     if model_type not in model_registry:
