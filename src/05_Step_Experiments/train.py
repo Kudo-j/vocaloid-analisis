@@ -32,6 +32,7 @@ from train_util.dataset import VocalDataset, create_datasets, collate_fn
 from train_util.losses import build_loss, create_mask
 from train_util.early_stopping import EarlyStopping
 from train_util.evaluate import Evaluator
+from train_util.inference import _get_window, weighted_overlap_add
 from plot_util.plot import save_loss_plot
 
 # モデル
@@ -597,6 +598,8 @@ def evaluate_model(custom_config=None, model_load_path=None):
 
                     # 実際の長さとseq_lenが一致するはずですが、念のためスライス
                     actual_len = min(seq_len, e - s)
+                    if actual_len <= 0:
+                        continue
                     e = s + actual_len
 
                     y_true_seq = y_batch[b_idx, :actual_len].cpu().numpy()
@@ -608,10 +611,14 @@ def evaluate_model(custom_config=None, model_load_path=None):
                     # 正解データや追加特徴量は重なり部分で同じ値なので上書きでよい
                     y_true_full[s:e] = y_true_seq
 
-                    # 予測値とマスクは加算して最後に平均をとる
-                    y_pred_full[s:e] += y_pred_seq
-                    v_mask_full[s:e] += v_mask_seq
-                    overlap_count[s:e, 0] += 1.0
+                    # 予測値の加重オーバーラップ加算（inference.py の共通関数を利用）
+                    y_pred_full, overlap_count = weighted_overlap_add(
+                        y_pred_full, overlap_count, s, e, y_pred_seq, offset=0.1
+                    )
+
+                    # マスクも同様に窓重み付きで加算
+                    w = _get_window(actual_len, offset=0.1)
+                    v_mask_full[s:e] += v_mask_seq * w
 
                     for k, feat_name in PLOT_EXTRA_FEATURES.items():
                         if k in x_dict:

@@ -43,6 +43,7 @@ from models.cnn_bilstm import CNNBiLSTM
 from models.bilstm_base import BiLSTMBase
 from models.fusion_block import FeatureFusionBlock
 from models.unified_model import UnifiedModel
+from train_util.inference import run_sliding_window_inference
 
 # 設定の読み込み
 import predict_config as cfg
@@ -505,43 +506,26 @@ def main():
         f"\n推論実行中... (frames={total_frames}, chunk={cfg.CHUNK_SIZE}, hop={cfg.CHUNK_HOP})"
     )
 
-    pred_sum = np.zeros((total_frames, total_y_dim), dtype=np.float32)
-    count_map = np.zeros((total_frames, 1), dtype=np.float32)
+    # 推論用にテンソルを準備
+    x_tensors = {k: torch.from_numpy(v).unsqueeze(0) for k, v in x_branches.items()}
 
-    # 辞書型テンソルに変換
-    x_tensors = {}
-    for k, v in x_branches.items():
-        x_tensors[k] = torch.from_numpy(v).unsqueeze(0)  # (1, T, D)
+    # 共有ユーティリティで加重オーバーラップ加算推論を実行
+    y_pred_full = run_sliding_window_inference(
+        model=model,
+        x_tensors=x_tensors,
+        total_frames=total_frames,
+        chunk_size=cfg.CHUNK_SIZE,
+        chunk_hop=cfg.CHUNK_HOP,
+        device=device,
+        device_type=device_type,
+        offset=0.1,
+    )
 
-    num_chunks = 0
-    with torch.no_grad():
-        start = 0
-        while start < total_frames:
-            end = min(start + cfg.CHUNK_SIZE, total_frames)
+    # downstream が pred_sum を期待しているので代入
+    pred_sum = y_pred_full
 
-            # 各ブランチをスライスして辞書型で渡す
-            x_chunk = {}
-            for k, v in x_tensors.items():
-                x_chunk[k] = v[:, start:end, :].to(device)
-
-            from torch.cuda.amp import autocast
-
-            with autocast(enabled=(device_type == "cuda")):
-                output = model(x_chunk)
-
-            out_np = output[0, : end - start].cpu().numpy()
-            pred_sum[start:end] += out_np
-            count_map[start:end, 0] += 1.0
-
-            num_chunks += 1
-            start += cfg.CHUNK_HOP
-
-    # オーバーラップ部分の平均
-    valid_idx = count_map[:, 0] > 0
-    pred_sum[valid_idx] /= count_map[valid_idx]
-
-    y_pred_full = pred_sum
-    print(f"  推論完了: {num_chunks} チャンク処理")
+    print("  推論完了")
+    print("  推論完了: 完了")
 
     # --- 7. 正解値の取得 ---
     y_true_full = np.zeros((total_frames, total_y_dim), dtype=np.float32)
