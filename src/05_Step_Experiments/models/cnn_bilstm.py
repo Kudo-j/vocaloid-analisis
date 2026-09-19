@@ -5,7 +5,7 @@ CNN + Bi-LSTM モデル。
 
 研究計画のメインモデル。
 1-d Convolution で入力を高次元化した後、Bi-LSTM で時系列の文脈を学習する。
-オプションで Bi-LSTM の直後に Attention 層 (nn.MultiheadAttention) を挿入可能。
+オプションで Bi-LSTM の直後に双方向ゲート層 (DirectionalGate) を挿入可能。
 
 構成:
     [入力 (input_dim次元)]
@@ -20,8 +20,8 @@ CNN + Bi-LSTM モデル。
     ───Bi-LSTM Block───
     [Bi-LSTM (双方向、num_layers層、hidden_dim次元)] ── 時系列の文脈を学習
            ↓
-    ───Attention Block (任意 / 残差接続付き)───
-    [nn.MultiheadAttention] ── 長期依存・重要フレームの集約 (x + Attn(x))
+    ───Directional Gate Block (任意 / 残差接続なし)───
+    [DirectionalGate] ── 順逆の相補的スケーリング (gate*fwd, (1-gate)*bwd)
            ↓
     [Linear] ── hidden_dim*2 を output_dim へ低次元化
            ↓
@@ -33,21 +33,26 @@ CNN + Bi-LSTM モデル。
 import torch
 import torch.nn as nn
 
+try:
+    from models.directional_gate import DirectionalGate
+except ModuleNotFoundError:
+    from directional_gate import DirectionalGate
+
 
 class CNNBiLSTM(nn.Module):
     """
-    CNN + Bi-LSTM モデル (Attention オプション付き)。
+    CNN + Bi-LSTM モデル (DirectionalGate オプション付き)。
 
     Args:
         input_dim: 入力特徴量の次元数。config から動的に決定される。
         output_dim: 出力次元数（推定対象パラメータ数）。
         conv_channels: 1-d Conv の出力チャンネル数。
         kernel_size: 1-d Conv のカーネルサイズ。
+        num_conv_layers: 1-d Conv の層数。
         hidden_dim: Bi-LSTM の隠れ層次元数。
         num_layers: Bi-LSTM の層数。
-        dropout: Bi-LSTM / Attention のドロップアウト率。
-        use_attention: Attention層 (nn.MultiheadAttention) を使用するかどうか。
-        num_heads: MultiheadAttention のヘッド数。
+        dropout: Bi-LSTM のドロップアウト率。
+        use_gate: 双方向ゲート層 (DirectionalGate) を使用するかどうか。
     """
 
     def __init__(
@@ -60,12 +65,12 @@ class CNNBiLSTM(nn.Module):
         hidden_dim=64,
         num_layers=1,
         dropout=0.3,
-        use_attention=False,
-        num_heads=4,
+        use_gate=False,
+        **kwargs,
     ):
         super().__init__()
 
-        self.use_attention = use_attention
+        self.use_gate = use_gate
         embed_dim = hidden_dim * 2
 
         # --- ConvBlock ---
@@ -101,21 +106,12 @@ class CNNBiLSTM(nn.Module):
             dropout=dropout if num_layers > 1 else 0.0,
         )
 
-        # --- Attention層 ---
-        if self.use_attention:
-            if embed_dim % num_heads != 0:
-                raise ValueError(
-                    f"embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads})"
-                )
-            self.attention = nn.MultiheadAttention(
-                embed_dim=embed_dim,
-                num_heads=num_heads,
-                batch_first=True,
-                dropout=dropout,
-            )
+        # --- 双方向ゲート層 (DirectionalGate) ---
+        if self.use_gate:
+            self.directional_gate = DirectionalGate(hidden_dim=hidden_dim)
 
         # --- 出力投影層 ---
-        # Bi-LSTM / Attention の出力は hidden_dim * 2 (順方向 + 逆方向)
+        # Bi-LSTM / Gate の出力は hidden_dim * 2 (順方向 + 逆方向)
         self.output_proj = nn.Linear(embed_dim, output_dim)
 
         # --- 出力活性化関数 ---
@@ -136,10 +132,9 @@ class CNNBiLSTM(nn.Module):
         # Bi-LSTM
         x, _ = self.lstm(x)  # (B, S, hidden_dim * 2)
 
-        # Attention層 (残差接続付き)
-        if self.use_attention:
-            attn_out, _ = self.attention(x, x, x)  # (B, S, hidden_dim * 2)
-            x = x + attn_out  # 残差接続 (Residual Connection)
+        # 双方向ゲート層 (残差接続なし)
+        if self.use_gate:
+            x = self.directional_gate(x)  # (B, S, hidden_dim * 2)
 
         # 出力投影
         x = self.output_proj(x)  # (B, S, output_dim)
@@ -153,21 +148,23 @@ if __name__ == "__main__":
     dummy_input = torch.randn(2, 100, 32)  # (Batch=2, Seq=100, Dim=32)
     print(f"入力テンソル形状: {dummy_input.shape}")
 
-    for layers in [1, 2, 3]:
-        model = CNNBiLSTM(
-            input_dim=32,
-            output_dim=3,
-            conv_channels=64,
-            kernel_size=19,
-            num_conv_layers=layers,
-            hidden_dim=64,
-            num_layers=1,
-        )
-        model.eval()
-        with torch.no_grad():
-            out = model(dummy_input)
-        print(f"num_conv_layers={layers} 出力テンソル形状: {out.shape}")
-        assert out.shape == (2, 100, 3), f"num_conv_layers={layers} の出力形状が不正です"
+    for use_gate in [False, True]:
+        for layers in [1, 2]:
+            model = CNNBiLSTM(
+                input_dim=32,
+                output_dim=3,
+                conv_channels=64,
+                kernel_size=19,
+                num_conv_layers=layers,
+                hidden_dim=64,
+                num_layers=1,
+                use_gate=use_gate,
+            )
+            model.eval()
+            with torch.no_grad():
+                out = model(dummy_input)
+            print(f"use_gate={use_gate}, num_conv_layers={layers} 出力テンソル形状: {out.shape}")
+            assert out.shape == (2, 100, 3), "出力形状が不正です"
 
     print("すべての動作テストが正常に完了しました。")
 

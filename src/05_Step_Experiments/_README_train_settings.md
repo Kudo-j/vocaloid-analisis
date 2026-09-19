@@ -40,9 +40,8 @@
 *   `kernel_size`: 1次元CNNのカーネルサイズ（デフォルト: 9または19）。
 *   `hidden_dim`: Bi-LSTM の隠れ層次元数（デフォルト: 64）。
 *   `num_layers`: Bi-LSTM の積層数（デフォルト: 1）。
-*   `dropout`: Bi-LSTM / Attention のドロップアウト率（デフォルト: 0.3）。
-*   `use_attention`: MultiheadAttention 層を挿入するかどうかのフラグ（`true` / `false`）。
-*   `num_heads`: MultiheadAttention のヘッド数。
+*   `dropout`: Bi-LSTM のドロップアウト率（デフォルト: 0.3）。
+*   `use_gate`: 双方向ゲート層（DirectionalGate）を挿入するかどうかのフラグ（`true` / `false`）。順方向と逆方向の相補的スケーリングを行う。
 
 #### `lstm_base` の主要パラメータ
 *   `direction`: LSTMの処理方向を指定する。

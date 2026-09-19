@@ -29,15 +29,13 @@
             "hidden_dim": 64,
             "num_layers": 1,
             "dropout": 0.3,
-            "use_attention": true,
-            "num_heads": 4
+            "use_gate": true
         },
         "bilstm_base": {
             "hidden_dim": 64,
             "num_layers": 1,
             "dropout": 0.3,
-            "use_attention": true,
-            "num_heads": 4
+            "use_gate": true
         },
         "lstm_base": {
             "hidden_dim": 64,

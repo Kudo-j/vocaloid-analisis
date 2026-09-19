@@ -35,12 +35,15 @@
 複数系統の入力特徴量を結合・高次元化するための前処理モジュール。`pass_through`（単純結合）、`late_concat`（個別モジュール処理後に結合）、`late_add`（次元統一後に加算）の3つの融合戦略（`FUSION_STRATEGY`）に対応している。
 
 ### 2. `bilstm_base.py`
-Bi-LSTM 単体で構成されるパラメータ予測モデル。`train_settings.json` 等で `use_attention=True` が指定された場合、Bi-LSTM の出力に対して残差接続付きの `nn.MultiheadAttention` を適用する。
+Bi-LSTM 単体で構成されるパラメータ予測モデルである。`train_settings.json` 等で `use_gate=True` が指定された場合、Bi-LSTM の出力に対して双方向ゲート層（`DirectionalGate`）を適用し、順方向と逆方向の相補的スケーリングを行う。
 
 ### 3. `cnn_bilstm.py`
-1D-CNN と Bi-LSTM を組み合わせたモデル。1D-CNN で局所特徴を抽出した後に Bi-LSTM で時系列の文脈を学習する。`bilstm_base.py` と同様に Attention 層の挿入にも対応している。
+1D-CNN と Bi-LSTM を組み合わせたモデルである。1D-CNN で局所特徴を抽出した後に Bi-LSTM で時系列の文脈を学習する。`bilstm_base.py` と同様に `use_gate` による双方向ゲート層の挿入に対応している。
 
-### 4. `unified_model.py`
+### 4. `directional_gate.py`
+Bi-LSTM の順方向・逆方向の出力を相補的にスケーリングする共通ゲートモジュールである。隠れ状態からフレームごとのスカラーゲート値（0.0～1.0）をシグモイド関数で算出し、順方向成分を乗算、逆方向成分をその補数（1 - gate）で乗算して再結合する。
+
+### 5. `unified_model.py`
 特徴量融合ブロック（`FeatureFusionBlock`）とメイン予測モデル（`core_model`）を1つにまとめる統合ラッパークラス。データの結合から予測値の出力までを一括処理し、モデルの保存や学習管理をシンプルにする。
 
 ## 設定ファイルの取り扱いについて（Git管理外）

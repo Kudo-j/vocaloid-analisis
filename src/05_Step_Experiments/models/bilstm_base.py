@@ -5,15 +5,20 @@ Bi-LSTM 単体モデル。
 
 研究計画 1-4 の比較実験用。
 CNN や線形投影層を通さず、入力特徴量(RMS等)を直接 Bi-LSTM に入力する。
-アテンション層（nn.MultiheadAttention）の切り替えに対応。
+双方向ゲート層 (DirectionalGate) の切り替えに対応。
 """
 import torch
 import torch.nn as nn
 
+try:
+    from models.directional_gate import DirectionalGate
+except ModuleNotFoundError:
+    from directional_gate import DirectionalGate
+
 
 class BiLSTMBase(nn.Module):
     """
-    Bi-LSTM 単体モデル（CNN・入力線形層なし）。
+    Bi-LSTM 単体モデル（CNN・入力線形層なし、DirectionalGate オプション付き）。
 
     Args:
         input_dim: 入力特徴量の次元数（直接LSTMの入力となる）。
@@ -21,8 +26,7 @@ class BiLSTMBase(nn.Module):
         hidden_dim: Bi-LSTM の隠れ層次元数。
         num_layers: Bi-LSTM の層数。
         dropout: Bi-LSTM のドロップアウト率。
-        use_attention: Attention層 (nn.MultiheadAttention) を使用するかどうか。
-        num_heads: MultiheadAttention のヘッド数。
+        use_gate: 双方向ゲート層 (DirectionalGate) を使用するかどうか。
     """
 
     def __init__(
@@ -32,12 +36,12 @@ class BiLSTMBase(nn.Module):
         hidden_dim=64,
         num_layers=2,
         dropout=0.3,
-        use_attention=False,
-        num_heads=4,
+        use_gate=False,
+        **kwargs,
     ):
         super().__init__()
 
-        self.use_attention = use_attention
+        self.use_gate = use_gate
         embed_dim = hidden_dim * 2
 
         # --- Bi-LSTM ---
@@ -51,18 +55,9 @@ class BiLSTMBase(nn.Module):
             dropout=dropout if num_layers > 1 else 0.0,
         )
 
-        # --- Attention層 ---
-        if self.use_attention:
-            if embed_dim % num_heads != 0:
-                raise ValueError(
-                    f"embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads})"
-                )
-            self.attention = nn.MultiheadAttention(
-                embed_dim=embed_dim,
-                num_heads=num_heads,
-                batch_first=True,
-                dropout=dropout,
-            )
+        # --- 双方向ゲート層 (DirectionalGate) ---
+        if self.use_gate:
+            self.directional_gate = DirectionalGate(hidden_dim=hidden_dim)
 
         # --- 全結合層 (出力投影層) ---
         self.output_proj = nn.Linear(embed_dim, output_dim)
@@ -79,13 +74,31 @@ class BiLSTMBase(nn.Module):
         # 入力 x を直接 Bi-LSTM に渡す (状態 hn, cn は _ で捨てる)
         x, _ = self.lstm(x)  # (B, S, hidden_dim * 2)
 
-        # Attention層 (残差接続付き)
-        if self.use_attention:
-            attn_out, _ = self.attention(x, x, x)  # (B, S, hidden_dim * 2)
-            x = x + attn_out  # 残差接続 (Residual Connection)
+        # 双方向ゲート層 (残差接続なし)
+        if self.use_gate:
+            x = self.directional_gate(x)  # (B, S, hidden_dim * 2)
 
         # 出力層を通す
         x = self.output_proj(x)  # (B, S, output_dim)
         x = self.output_activation(x)
 
         return x
+
+
+if __name__ == "__main__":
+    print("=== BiLSTMBase 動作確認テスト ===")
+    dummy_input = torch.randn(2, 100, 32)
+    for use_gate in [False, True]:
+        model = BiLSTMBase(
+            input_dim=32,
+            output_dim=3,
+            hidden_dim=64,
+            num_layers=2,
+            use_gate=use_gate,
+        )
+        model.eval()
+        with torch.no_grad():
+            out = model(dummy_input)
+        print(f"use_gate={use_gate} 出力形状: {out.shape}")
+        assert out.shape == (2, 100, 3), "出力形状が不正です"
+    print("BiLSTMBase 動作テスト正常完了。")
