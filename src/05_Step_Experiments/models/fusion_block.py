@@ -15,7 +15,7 @@ class BranchEmbedding(nn.Module):
         return self.embedding(indices)
 
 
-class BranchCNN(nn.Module):
+class BranchCNN1D(nn.Module):
     def __init__(self, in_dim, out_dim, kernel_size=9):
         super().__init__()
         padding = kernel_size // 2
@@ -35,6 +35,31 @@ class BranchCNN(nn.Module):
         x = self.bn(x)
         x = self.relu(x)
         x = x.transpose(1, 2)
+        return x
+
+
+class BranchCNN2D(nn.Module):
+    def __init__(self, in_dim, out_dim, channels=32):
+        super().__init__()
+        # 2次元畳み込み (周波数 x 時間)
+        self.conv1 = nn.Conv2d(1, channels, kernel_size=(5, 5), padding=(2, 2))
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1))
+
+        self.conv2 = nn.Conv2d(channels, out_dim, kernel_size=(5, 5), padding=(2, 2))
+        self.bn2 = nn.BatchNorm2d(out_dim)
+        self.relu2 = nn.ReLU()
+        # 周波数軸を1に集約し、時間軸長は同一に維持
+        self.pool2 = nn.AdaptiveAvgPool2d((1, None))
+
+    def forward(self, x):
+        # x shape: (Batch, Seq, in_dim) -> Conv2d expects (Batch, 1, in_dim, Seq)
+        x = x.transpose(1, 2).unsqueeze(1)
+        x = self.pool1(self.relu1(self.bn1(self.conv1(x))))
+        x = self.pool2(self.relu2(self.bn2(self.conv2(x))))
+        # (Batch, out_dim, 1, Seq) -> (Batch, Seq, out_dim)
+        x = x.squeeze(2).transpose(1, 2)
         return x
 
 
@@ -102,8 +127,10 @@ class FeatureFusionBlock(nn.Module):
             return nn.Identity()
         elif b_type == "linear":
             return nn.Sequential(nn.Linear(in_dim, self.out_dim), nn.ReLU())
-        elif b_type == "cnn":
-            return BranchCNN(in_dim, self.out_dim, self.conv_kernel)
+        elif b_type == "cnn1d":
+            return BranchCNN1D(in_dim, self.out_dim, self.conv_kernel)
+        elif b_type == "cnn2d":
+            return BranchCNN2D(in_dim, self.out_dim)
         elif b_type == "embedding":
             return BranchEmbedding(in_dim, self.out_dim)
         elif b_type == "lstm":
