@@ -24,15 +24,14 @@ class BranchCNN1D(nn.Module):
             out_channels=out_dim,
             kernel_size=kernel_size,
             padding=padding,
+            bias=False,
         )
-        self.bn = nn.BatchNorm1d(out_dim)
         self.relu = nn.ReLU()
 
     def forward(self, x):
         # x shape: (Batch, Seq, in_dim) -> Conv1d expects (Batch, Channels, Seq)
         x = x.transpose(1, 2)
         x = self.conv(x)
-        x = self.bn(x)
         x = self.relu(x)
         x = x.transpose(1, 2)
         return x
@@ -42,13 +41,15 @@ class BranchCNN2D(nn.Module):
     def __init__(self, in_dim, out_dim, channels=32):
         super().__init__()
         # 2次元畳み込み (周波数 x 時間)
-        self.conv1 = nn.Conv2d(1, channels, kernel_size=(5, 5), padding=(2, 2))
-        self.bn1 = nn.BatchNorm2d(channels)
+        self.conv1 = nn.Conv2d(
+            1, channels, kernel_size=(5, 5), padding=(2, 2), bias=False
+        )
         self.relu1 = nn.ReLU()
         self.pool1 = nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1))
 
-        self.conv2 = nn.Conv2d(channels, out_dim, kernel_size=(5, 5), padding=(2, 2))
-        self.bn2 = nn.BatchNorm2d(out_dim)
+        self.conv2 = nn.Conv2d(
+            channels, out_dim, kernel_size=(5, 5), padding=(2, 2), bias=False
+        )
         self.relu2 = nn.ReLU()
         # 周波数軸を1に集約し、時間軸長は同一に維持
         self.pool2 = nn.AdaptiveAvgPool2d((1, None))
@@ -56,8 +57,8 @@ class BranchCNN2D(nn.Module):
     def forward(self, x):
         # x shape: (Batch, Seq, in_dim) -> Conv2d expects (Batch, 1, in_dim, Seq)
         x = x.transpose(1, 2).unsqueeze(1)
-        x = self.pool1(self.relu1(self.bn1(self.conv1(x))))
-        x = self.pool2(self.relu2(self.bn2(self.conv2(x))))
+        x = self.pool1(self.relu1(self.conv1(x)))
+        x = self.pool2(self.relu2(self.conv2(x)))
         # (Batch, out_dim, 1, Seq) -> (Batch, Seq, out_dim)
         x = x.squeeze(2).transpose(1, 2)
         return x
