@@ -66,11 +66,20 @@ def main():
     print("=" * 60)
 
     # --- 1. features.json から sr, shift_length 等の取得 ---
-    if not os.path.exists(cfg.FEATURES_JSON_PATH):
-        print(f"[Error] features.json not found: {os.path.abspath(cfg.FEATURES_JSON_PATH)}")
+    model_dir = getattr(cfg, "MODEL_DIR", None)
+    features_json_path = getattr(cfg, "FEATURES_JSON_PATH", None)
+    if features_json_path is None and model_dir:
+        features_json_path = os.path.join(model_dir, "features.json")
+
+    if not features_json_path or not os.path.exists(features_json_path):
+        print(
+            f"[Error] features.json がありません: "
+            f"{os.path.abspath(features_json_path) if features_json_path else '未指定'}"
+        )
+        print("処理を中止します。")
         return
 
-    with open(cfg.FEATURES_JSON_PATH, "r", encoding="utf-8") as f:
+    with open(features_json_path, "r", encoding="utf-8") as f:
         raw_text = f.read().replace("NaN", "null")
         feature_info = json.loads(raw_text)
 
@@ -92,19 +101,30 @@ def main():
 
     print(f"\n対象曲名: {cfg.INPUT_FILE_NAME}")
 
+    data_search_dir = getattr(cfg, "DATA_SEARCH_DIR", None)
+    wav_search_dir = getattr(cfg, "WAV_SEARCH_DIR", data_search_dir)
+    vsqx_search_dir = getattr(cfg, "VSQX_SEARCH_DIR", data_search_dir)
+    pred_wav_search_dir = getattr(cfg, "PRED_WAV_SEARCH_DIR", cfg.OUTPUT_DIR)
+
     # A. 正解WAV
-    print(f"正解WAV検索中: {os.path.abspath(cfg.WAV_SEARCH_DIR)}")
-    try:
-        gt_wav_path = find_file_recursive(cfg.WAV_SEARCH_DIR, cfg.INPUT_FILE_NAME, ".wav")
-    except (FileNotFoundError, ValueError) as e:
-        errors.append(f"Ground Truth WAV: {e}")
+    if not wav_search_dir or not os.path.exists(wav_search_dir):
+        errors.append(f"WAV 検索ディレクトリがありません: {wav_search_dir}")
+    else:
+        print(f"正解WAV検索中: {os.path.abspath(wav_search_dir)}")
+        try:
+            gt_wav_path = find_file_recursive(wav_search_dir, cfg.INPUT_FILE_NAME, ".wav")
+        except (FileNotFoundError, ValueError) as e:
+            errors.append(f"Ground Truth WAV: {e}")
 
     # B. 正解VSQX
-    print(f"正解VSQX検索中: {os.path.abspath(cfg.VSQX_SEARCH_DIR)}")
-    try:
-        gt_vsqx_path = find_file_recursive(cfg.VSQX_SEARCH_DIR, cfg.INPUT_FILE_NAME, ".vsqx")
-    except (FileNotFoundError, ValueError) as e:
-        errors.append(f"Ground Truth VSQX: {e}")
+    if not vsqx_search_dir or not os.path.exists(vsqx_search_dir):
+        errors.append(f"VSQX 検索ディレクトリがありません: {vsqx_search_dir}")
+    else:
+        print(f"正解VSQX検索中: {os.path.abspath(vsqx_search_dir)}")
+        try:
+            gt_vsqx_path = find_file_recursive(vsqx_search_dir, cfg.INPUT_FILE_NAME, ".vsqx")
+        except (FileNotFoundError, ValueError) as e:
+            errors.append(f"Ground Truth VSQX: {e}")
 
     # C. 予測VSQX (predict.pyの出力ファイル)
     pred_vsqx_name = f"{cfg.INPUT_FILE_NAME}_predict"
@@ -116,12 +136,16 @@ def main():
 
     # D. レンダリング済み予測WAV
     # "{INPUT_FILE_NAME}_predict.wav" または "{INPUT_FILE_NAME}.wav" を検索
-    print(f"予測WAV検索中: {os.path.abspath(cfg.PRED_WAV_SEARCH_DIR)}")
+    print(f"予測WAV検索中: {os.path.abspath(pred_wav_search_dir)}")
     try:
         try:
-            pred_wav_path = find_file_recursive(cfg.PRED_WAV_SEARCH_DIR, pred_vsqx_name, ".wav")
+            pred_wav_path = find_file_recursive(
+                pred_wav_search_dir, pred_vsqx_name, ".wav"
+            )
         except FileNotFoundError:
-            pred_wav_path = find_file_recursive(cfg.PRED_WAV_SEARCH_DIR, cfg.INPUT_FILE_NAME, ".wav")
+            pred_wav_path = find_file_recursive(
+                pred_wav_search_dir, cfg.INPUT_FILE_NAME, ".wav"
+            )
     except (FileNotFoundError, ValueError) as e:
         errors.append(f"Rendered Predicted WAV: {e}")
 
@@ -130,7 +154,7 @@ def main():
         for e in errors:
             print(f"[Error] {e}")
         print("=" * 60)
-        print("処理を中止します。上記ファイルを用意した上で再実行してください。")
+        print("必要なファイルが見つからないため、処理を中止します。")
         return
 
     # --- 3. RMS特徴量の抽出 (正解WAV vs 予測WAV) ---

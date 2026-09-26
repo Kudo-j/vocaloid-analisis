@@ -21,7 +21,7 @@
 - **`predict_config.py`**
   DNNモデルの推論（`predict.py`）およびレンダリング後評価（`plot_rendered_eval.py`）で共通して使用する設定ファイル。対象曲名やパスを一元管理する。
 - **`predict.py`**
-  学習済みのDNNモデル（.pth）を用いて推論を行うスクリプト。前処理で生成された `features.json` をロードし、スライディングウィンドウ（Overlap-Add）方式でオーバーラップ加算平均を行いながら推論を実施後、予測値を書き込んだVSQXを出力する。
+  指定された `MODEL_DIR` 内の学習済みDNNモデル（`best_model.pth`）、設定（`train_config.json`）、および特徴量情報（`features.json`）をロードし、スライディングウィンドウ（Overlap-Add）方式でオーバーラップ加算平均を行いながら推論を実施後、予測値を書き込んだVSQXを出力する。
 - **`plot_rendered_eval.py`**
   予測VSQXをVocaloidソフトで音声化（レンダリング）した結果（予測WAV）と正解データを詳細に比較するスクリプト。上段にDYNパラメータ、下段にRMS音響特徴量の比較波形をプロットする。
 - **`models/`**

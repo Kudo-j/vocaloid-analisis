@@ -14,33 +14,20 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # =============================================================================
 
 # --- 推論対象 ---
-INPUT_FILE_NAME = "Test_8"  # 対象曲のファイル名 (拡張子なし)
+INPUT_FILE_NAME = "Test_い_9"  # 対象曲のファイル名 (拡張子なし)
 
-# --- ファイル検索ディレクトリ ---
-WAV_SEARCH_DIR = "./data/Step1/wav"  # 正解WAVの検索フォルダ
-VSQX_SEARCH_DIR = "./data/Step1/vsqx"  # 正解VSQXの検索フォルダ
-PRED_WAV_SEARCH_DIR = os.path.join(
-    BASE_DIR, "output"
-)  # Vocaloidで書き出した予測WAVの検索フォルダ
+# --- 入力データ検索ディレクトリ ---
+DATA_SEARCH_DIR = "./data/Step2"  # 正解WAV/VSQXの検索フォルダ (配下を再帰検索)
 
-# --- 学習済みモデル ---
-# train_settings.json と同じ EXPERIMENT_NAME / MODEL_TYPE を使用
-EXPERIMENT_NAME = "Step1_note_boundary2"
-MODEL_TYPE = "cnn_bilstm"
-MODEL_PATH = os.path.join(
-    BASE_DIR, "output", EXPERIMENT_NAME, MODEL_TYPE, "best_model.pth"
-)
-
-# --- features.json (特徴量定義・正規化パラメータ) ---
-FEATURES_JSON_PATH = os.path.join(
-    BASE_DIR, "processed", "Step1_note_boundary_Lin2", "features.json"
-)
-
-# --- train_settings.json (モデル構築パラメータ) ---
-TRAIN_SETTINGS_PATH = os.path.join(BASE_DIR, "train_settings.json")
+# --- 使用モデルディレクトリ ---
+# best_model.pth, train_config.json, features.json が置かれているフォルダを指定
+MODEL_DIR = os.path.join(BASE_DIR, "output", "predict", "config")
 
 # --- 出力先 ---
-OUTPUT_DIR = os.path.join(BASE_DIR, "output", "predict")
+OUTPUT_DIR = os.path.join(BASE_DIR, "output", "predict", "Step2")
+
+# --- グラフ描画設定 ---
+REMOVE_INTRO_SILENCE = True  # イントロの無音区間をカットしてプロットするかどうか (Falseでカットしない)
 
 # --- チャンク推論設定 (スライディングウィンドウ・オーバーラップ加算平均) ---
 CHUNK_SIZE = 600  # 1回の推論フレーム数 (dataset.py の CHUNK_SIZE と合わせる)

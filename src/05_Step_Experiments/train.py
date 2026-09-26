@@ -17,6 +17,7 @@ import json
 import math
 import time
 import random
+import shutil
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -29,7 +30,12 @@ import numpy as np
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "util"))
 
 from train_util.dataset import (
-    VocalDataset, create_datasets, collate_fn, _load_npz_safe, CHUNK_SIZE, CHUNK_HOP,
+    VocalDataset,
+    create_datasets,
+    collate_fn,
+    _load_npz_safe,
+    CHUNK_SIZE,
+    CHUNK_HOP,
 )
 from train_util.losses import build_loss, create_mask
 from train_util.early_stopping import EarlyStopping
@@ -160,6 +166,16 @@ def train_model(custom_config=None, is_tuning=False):
     with open(features_path, "r", encoding="utf-8") as f:
         feature_info = json.load(f)
 
+    # --- 推論用スナップショットの保存 (train_config.json & features.json) ---
+    if not is_tuning:
+        train_config_save_path = os.path.join(EXPERIMENT_DIR, "train_config.json")
+        features_save_path = os.path.join(EXPERIMENT_DIR, "features.json")
+        with open(train_config_save_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4, ensure_ascii=False)
+        shutil.copyfile(features_path, features_save_path)
+        print(f"  -> Config snapshot saved: {train_config_save_path}")
+        print(f"  -> features.json copied: {features_save_path}")
+
     # 辞書型の x_dims, y_dims
     x_dims = feature_info.get("x_dims", {})
     y_dims = feature_info.get("y_dims", {})
@@ -178,6 +194,10 @@ def train_model(custom_config=None, is_tuning=False):
     total_x_dim = fusion_block.output_dim
 
     print(f"入力ブランチ: {dict(x_dims)} -> Fusion後次元数: {total_x_dim}")
+    if hasattr(fusion_block, "get_branch_weights") and fusion_block.get_branch_weights():
+        init_weights = fusion_block.get_branch_weights()
+        init_weights_str = ", ".join(f"{k}: {w:.4f}" for k, w in init_weights.items())
+        print(f"ブランチ初期重み: {init_weights_str}")
     print(f"出力次元数: {total_y_dim} {dict(y_dims)}")
 
     # --- Coreモデルと統合 ---
@@ -211,32 +231,54 @@ def train_model(custom_config=None, is_tuning=False):
         batch_size=BATCH_SIZE,
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=2,
+        num_workers=0,
         worker_init_fn=worker_init_fn,
-        pin_memory=True,
-        persistent_workers=True,
+        pin_memory=False,
+        persistent_workers=False,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=BATCH_SIZE,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=2,
-        pin_memory=True,
-        persistent_workers=True,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
     )
 
     # --- 損失関数とオプティマイザ ---
     criterion = build_loss(LOSS_TYPE).to(device)
     print(f"損失関数: {LOSS_TYPE}")
-    optimizer = optim.AdamW(model.parameters(), lr=LR)
+
+    # ブランチ重み（branch_scales または branch_logits）が存在する場合は独立した学習率を設定
+    branch_param = getattr(getattr(model, "fusion", None), "branch_scales", None)
+    if branch_param is None:
+        branch_param = getattr(getattr(model, "fusion", None), "branch_logits", None)
+    branch_lr_mult = 30.0  # ブランチ重みの学習率倍率
+
+    if branch_param is not None:
+        base_params = [p for p in model.parameters() if p is not branch_param]
+        optimizer = optim.AdamW(
+            [
+                {"params": base_params, "lr": LR},
+                {"params": [branch_param], "lr": LR * branch_lr_mult},
+            ]
+        )
+        scheduler_max_lr = [MAX_LR, MAX_LR * branch_lr_mult]
+        print(
+            f"オプティマイザ: AdamW (Base LR: {LR}, Branch Weight LR: {LR * branch_lr_mult} [{branch_lr_mult:.0f}x])"
+        )
+    else:
+        optimizer = optim.AdamW(model.parameters(), lr=LR)
+        scheduler_max_lr = MAX_LR
+
     scaler = GradScaler(enabled=(device_type == "cuda"))
 
     steps_per_epoch = math.ceil(len(train_loader) / ACCUM_STEPS)
 
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=MAX_LR,
+        max_lr=scheduler_max_lr,
         steps_per_epoch=steps_per_epoch,
         epochs=EPOCHS,
         pct_start=0.3,
@@ -438,6 +480,22 @@ def train_model(custom_config=None, is_tuning=False):
 
     if len(train_loss_history) > 0:
         print(f"Best Validation Loss: {best_val_loss:.6f} at Epoch {best_epoch}")
+
+        if hasattr(model, "fusion") and hasattr(model.fusion, "get_branch_weights"):
+            weights = model.fusion.get_branch_weights()
+            if weights:
+                weights_str = ", ".join(f"{k}: {w:.4f}" for k, w in weights.items())
+                print(f"  [Info] 学習完了時のブランチ重み: {weights_str}")
+                # status.txt にもブランチ重みと最良スコアを追記
+                status_file = os.path.join(EXPERIMENT_DIR, "status.txt")
+                try:
+                    with open(status_file, "a", encoding="utf-8") as f:
+                        f.write(f"Branch Weights: {weights_str}\n")
+                        f.write(
+                            f"Best Val Loss: {best_val_loss:.6f} (Epoch {best_epoch})\n"
+                        )
+                except Exception as e:
+                    print(f"  [Warning] status.txt への書き込み失敗: {e}")
 
         if not is_tuning:
             save_loss_plot(

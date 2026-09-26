@@ -274,42 +274,69 @@ def main():
     wav_path = vsqx_path = None
 
     print(f"\n入力ファイル名: {cfg.INPUT_FILE_NAME}")
-    print(f"WAV検索中: {os.path.abspath(cfg.WAV_SEARCH_DIR)}")
-    try:
-        wav_path = find_file_recursive(cfg.WAV_SEARCH_DIR, cfg.INPUT_FILE_NAME, ".wav")
-    except (FileNotFoundError, ValueError) as e:
-        errors.append(str(e))
 
-    print(f"VSQX検索中: {os.path.abspath(cfg.VSQX_SEARCH_DIR)}")
-    try:
-        vsqx_path = find_file_recursive(
-            cfg.VSQX_SEARCH_DIR, cfg.INPUT_FILE_NAME, ".vsqx"
-        )
-    except (FileNotFoundError, ValueError) as e:
-        errors.append(str(e))
+    # データ検索ディレクトリ (DATA_SEARCH_DIR または従来の WAV_SEARCH_DIR/VSQX_SEARCH_DIR)
+    data_search_dir = getattr(cfg, "DATA_SEARCH_DIR", None)
+    wav_search_dir = getattr(cfg, "WAV_SEARCH_DIR", data_search_dir)
+    vsqx_search_dir = getattr(cfg, "VSQX_SEARCH_DIR", data_search_dir)
 
-    if not os.path.exists(cfg.MODEL_PATH):
-        errors.append(f"Model file not found: {os.path.abspath(cfg.MODEL_PATH)}")
-    if not os.path.exists(cfg.FEATURES_JSON_PATH):
-        errors.append(
-            f"features.json not found: {os.path.abspath(cfg.FEATURES_JSON_PATH)}"
-        )
-    if not os.path.exists(cfg.TRAIN_SETTINGS_PATH):
-        errors.append(
-            f"train_settings.json not found: {os.path.abspath(cfg.TRAIN_SETTINGS_PATH)}"
-        )
+    if not wav_search_dir or not os.path.exists(wav_search_dir):
+        errors.append(f"WAV 検索ディレクトリがありません: {wav_search_dir}")
+    else:
+        print(f"WAV検索中: {os.path.abspath(wav_search_dir)}")
+        try:
+            wav_path = find_file_recursive(wav_search_dir, cfg.INPUT_FILE_NAME, ".wav")
+        except (FileNotFoundError, ValueError) as e:
+            errors.append(str(e))
+
+    if not vsqx_search_dir or not os.path.exists(vsqx_search_dir):
+        errors.append(f"VSQX 検索ディレクトリがありません: {vsqx_search_dir}")
+    else:
+        print(f"VSQX検索中: {os.path.abspath(vsqx_search_dir)}")
+        try:
+            vsqx_path = find_file_recursive(
+                vsqx_search_dir, cfg.INPUT_FILE_NAME, ".vsqx"
+            )
+        except (FileNotFoundError, ValueError) as e:
+            errors.append(str(e))
+
+    # --- モデルディレクトリ内の必須ファイル確認 ---
+    model_dir = getattr(cfg, "MODEL_DIR", None)
+    features_json_path = None
+    train_config_path = None
+    model_path = None
+
+    if not model_dir:
+        errors.append("MODEL_DIR が設定されていません。")
+    elif not os.path.exists(model_dir):
+        errors.append(f"MODEL_DIR が存在しません: {os.path.abspath(model_dir)}")
+    else:
+        model_path = os.path.join(model_dir, "best_model.pth")
+        train_config_path = os.path.join(model_dir, "train_config.json")
+        features_json_path = os.path.join(model_dir, "features.json")
+
+        if not os.path.exists(model_path):
+            errors.append(f"best_model.pth がありません: {os.path.abspath(model_path)}")
+        if not os.path.exists(train_config_path):
+            errors.append(
+                f"train_config.json がありません: {os.path.abspath(train_config_path)}"
+            )
+        if not os.path.exists(features_json_path):
+            errors.append(
+                f"features.json がありません: {os.path.abspath(features_json_path)}"
+            )
 
     if errors:
         print("\n" + "=" * 60)
         for e in errors:
             print(f"[Error] {e}")
         print("=" * 60)
-        print("処理を中止します。上記を確認してください。")
+        print("必要なファイルが見つからないため、処理を中止します。")
         return
 
     # --- 2. features.json のロード ---
-    print(f"\nfeatures.json 読み込み中: {cfg.FEATURES_JSON_PATH}")
-    with open(cfg.FEATURES_JSON_PATH, "r", encoding="utf-8") as f:
+    print(f"\nfeatures.json 読み込み中: {features_json_path}")
+    with open(features_json_path, "r", encoding="utf-8") as f:
         raw_text = f.read().replace("NaN", "null")
         feature_info = json.loads(raw_text)
 
@@ -339,13 +366,15 @@ def main():
     print(f"  SR: {sr}, SHIFT: {shift_length}")
     print(f"  出力パラメータ: {y_param_names}")
 
-    # --- 3. train_settings.json のロード (モデル構築パラメータ) ---
-    with open(cfg.TRAIN_SETTINGS_PATH, "r", encoding="utf-8") as f:
-        train_settings = json.load(f)
+    # --- 3. train_config.json のロード (モデル構築パラメータ) ---
+    print(f"\ntrain_config.json 読み込み中: {train_config_path}")
+    with open(train_config_path, "r", encoding="utf-8") as f:
+        train_config = json.load(f)
 
-    FUSION_STRATEGY = train_settings["FUSION_STRATEGY"]
-    BRANCH_MODULES = train_settings["BRANCH_MODULES"]
-    MODEL_PARAMS = train_settings.get("MODEL_PARAMS", {})
+    MODEL_TYPE = train_config["MODEL_TYPE"]
+    FUSION_STRATEGY = train_config["FUSION_STRATEGY"]
+    BRANCH_MODULES = train_config["BRANCH_MODULES"]
+    MODEL_PARAMS = train_config.get("MODEL_PARAMS", {})
 
     # --- 4. モデルの構築とロード ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -355,12 +384,12 @@ def main():
         x_dims_dict=x_dims, strategy=FUSION_STRATEGY, branch_modules=BRANCH_MODULES
     )
     total_x_dim = fusion_block.output_dim
-    core_model = _build_model(cfg.MODEL_TYPE, total_x_dim, total_y_dim, MODEL_PARAMS)
+    core_model = _build_model(MODEL_TYPE, total_x_dim, total_y_dim, MODEL_PARAMS)
     model = UnifiedModel(fusion_block, core_model).to(device)
 
-    model.load_state_dict(torch.load(cfg.MODEL_PATH, map_location=device))
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
-    print(f"  Model loaded: {cfg.MODEL_PATH}")
+    print(f"  Model loaded: {model_path}")
     print(f"  総パラメータ数: {sum(p.numel() for p in model.parameters()):,}")
 
     # --- 5. 特徴量の抽出と正規化 ---
@@ -604,7 +633,8 @@ def main():
     print("\n次のステップ:")
     print("  1. 出力された予測VSQXをVocaloidソフトで開く")
     print("  2. 予測WAVとして書き出す")
-    print(f"  3. 予測WAVを {cfg.PRED_WAV_SEARCH_DIR} に配置する")
+    pred_wav_search_dir = getattr(cfg, "PRED_WAV_SEARCH_DIR", cfg.OUTPUT_DIR)
+    print(f"  3. 予測WAVを {pred_wav_search_dir} に配置する")
     print("  4. plot_rendered_eval.py を実行して正解WAVと比較する")
 
 

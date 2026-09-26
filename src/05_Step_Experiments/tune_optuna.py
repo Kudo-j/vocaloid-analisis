@@ -3,6 +3,7 @@ import json
 import time
 import datetime
 import copy
+import shutil
 import ctypes
 import optuna
 
@@ -168,6 +169,15 @@ def main():
                     history_dict["train_metrics"], history_dict["val_metrics"],
                     plot_save_path, history_dict["best_epoch"], best_val_loss, history_dict["hyperparams"]
                 )
+
+                # 推論用スナップショットの保存 (train_config.json & features.json)
+                train_config_save_path = os.path.join(EXPERIMENT_DIR, "train_config.json")
+                with open(train_config_save_path, "w", encoding="utf-8") as f:
+                    json.dump(config, f, indent=4, ensure_ascii=False)
+                
+                features_src = os.path.join(config["DATA_DIR"], "features.json")
+                if os.path.exists(features_src):
+                    shutil.copyfile(features_src, os.path.join(EXPERIMENT_DIR, "features.json"))
             
             return best_val_loss
 
