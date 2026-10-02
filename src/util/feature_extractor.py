@@ -64,6 +64,38 @@ class AudioFeatureExtractor:
         )
         return librosa.amplitude_to_db(np.abs(cqt), ref=1.0, top_db=None).T
 
+    def _compute_cqt_framenorm(self, y):
+        """
+        フレーム単位で総エネルギーを1.0に規格化し、音量輪郭を除去したCQT特徴量。
+        有音フレームのみ総エネルギーで除算し、ピークから-60dB以下の無音フレームはフロアリングする。
+        """
+        params = self.config["cqt"]
+        cqt = librosa.cqt(
+            y=y,
+            sr=self.sr,
+            hop_length=self.shift_length,
+            n_bins=params["n_bins"],
+            bins_per_octave=params["bins_per_octave"],
+            fmin=params["fmin"],
+        )
+        # 線形パワー (|CQT|^2)
+        cqt_power = np.abs(cqt) ** 2
+
+        # フレームごとの総エネルギー (axis=0: 周波数軸の総和)
+        total_energy = np.sum(cqt_power, axis=0, keepdims=True)
+
+        # 相対閾値 (-60dB = ピークエネルギーの1e-6倍)
+        max_energy = np.max(total_energy)
+        energy_threshold = max(max_energy * 1e-6, 1e-10)
+
+        # 有音フレームのみ総エネルギーで正規化（合計1.0化）
+        is_voiced = total_energy >= energy_threshold
+        safe_denom = np.where(is_voiced, total_energy, 1.0)
+        cqt_norm = np.where(is_voiced, cqt_power / safe_denom, cqt_power)
+
+        cqt_db = librosa.power_to_db(cqt_norm, ref=1.0, top_db=80.0)
+        return cqt_db.T
+
     def _compute_mel(self, y):
         params = self.config["mel"]
         mel = librosa.feature.melspectrogram(
@@ -79,6 +111,36 @@ class AudioFeatureExtractor:
         # top_db はファイルごとの最大値に依存するため、共通基準使用時にはズレの原因になる。
         use_top_db = None if isinstance(ref_val, (int, float, np.floating)) else 80.0
         return librosa.power_to_db(mel, ref=ref_val, top_db=use_top_db).T
+
+    def _compute_mel_framenorm(self, y):
+        """
+        フレーム単位で総エネルギーを1.0に規格化し、音量輪郭を除去したメルスペクトログラム。
+        有音フレームのみ総エネルギーで除算し、ピークから-60dB以下の無音フレームはフロアリングする。
+        """
+        params = self.config["mel"]
+        mel = librosa.feature.melspectrogram(
+            y=y,
+            sr=self.sr,
+            hop_length=self.shift_length,
+            n_fft=params["n_fft"],
+            n_mels=params["n_mels"],
+            fmax=params["fmax"],
+            power=2.0,
+        )
+        # フレームごとの総エネルギー (axis=0: 周波数軸の総和)
+        total_energy = np.sum(mel, axis=0, keepdims=True)
+
+        # 相対閾値 (-60dB = ピークエネルギーの1e-6倍)
+        max_energy = np.max(total_energy)
+        energy_threshold = max(max_energy * 1e-6, 1e-10)
+
+        # 有音フレームのみ総エネルギーで正規化（合計1.0化）
+        is_voiced = total_energy >= energy_threshold
+        safe_denom = np.where(is_voiced, total_energy, 1.0)
+        mel_norm = np.where(is_voiced, mel / safe_denom, mel)
+
+        mel_db = librosa.power_to_db(mel_norm, ref=1.0, top_db=80.0)
+        return mel_db.T
 
     def _compute_mfcc(self, y):
         params = self.config["mfcc"]
@@ -102,9 +164,10 @@ class AudioFeatureExtractor:
     def _compute_rms(self, y):
         params = self.config["rms"]
         rms = librosa.feature.rms(y=y, frame_length=params["frame_length"], hop_length=self.shift_length)
-        # 振幅をdB表記に変換 (ref=1.0)
-        rms_db = librosa.amplitude_to_db(rms, ref=1.0, top_db=None)
-        return rms_db.T
+        # # 振幅をdB表記に変換 (ref=1.0) (線形スケールで学習するために無効化)
+        # rms_db = librosa.amplitude_to_db(rms, ref=1.0, top_db=None)
+        # return rms_db.T
+        return rms.T
 
     # --- STFT ---
     def _compute_stft(self, y):
@@ -397,8 +460,12 @@ class AudioFeatureExtractor:
         for f_type in feature_types:
             if f_type == "cqt":
                 feat = self._compute_cqt(y)
+            elif f_type == "cqt_framenorm":
+                feat = self._compute_cqt_framenorm(y)
             elif f_type == "mel":
                 feat = self._compute_mel(y)
+            elif f_type == "mel_framenorm":
+                feat = self._compute_mel_framenorm(y)
             elif f_type == "mfcc":
                 feat = self._compute_mfcc(y)
             elif f_type == "rms":
@@ -451,11 +518,11 @@ class AudioFeatureExtractor:
 
     def get_feature_dim(self, f_type):
         """指定された特徴量の次元数を返す"""
-        if f_type == "mel" or f_type == "source_mel":
+        if f_type in ["mel", "mel_framenorm", "source_mel"]:
             return self.config["mel"]["n_mels"]
         elif f_type == "mfcc":
             return self.config["mfcc"]["n_mfcc"]
-        elif f_type == "cqt":
+        elif f_type in ["cqt", "cqt_framenorm"]:
             return self.config["cqt"]["n_bins"]
         elif f_type in ["rms", "source_rms", "f0_world", "f0_crepe", 
                         "spectral_centroid", "spectral_bandwidth", 
