@@ -161,22 +161,27 @@ class Evaluator:
         sr=44100,
         shift_length=512,
         remove_intro_silence=True,
+        silence_margin_sec=1.0,
     ):
         """
         時系列波形をプロットして保存する。
         無音区間をグレー背景にし、時間軸を秒単位にする。
+        歌唱区間の前後に silence_margin_sec 秒の無音（間）を残してトリミングする。
         """
-        # イントロの無音削除
+        # イントロ・アウトロの無音削除（前後に適度な余白を残す）
         if remove_intro_silence and voicing_mask is not None:
             voiced_indices = np.where(voicing_mask > 0.5)[0]
             if len(voiced_indices) > 0:
-                start_idx = voiced_indices[0]
-                y_true = y_true[start_idx:]
-                y_pred = y_pred[start_idx:]
-                voicing_mask = voicing_mask[start_idx:]
+                margin_frames = int(silence_margin_sec * sr / shift_length)
+                start_idx = max(0, voiced_indices[0] - margin_frames)
+                end_idx = min(len(y_true), voiced_indices[-1] + 1 + margin_frames)
+
+                y_true = y_true[start_idx:end_idx]
+                y_pred = y_pred[start_idx:end_idx]
+                voicing_mask = voicing_mask[start_idx:end_idx]
                 if extra_features is not None:
                     for k in extra_features.keys():
-                        extra_features[k] = extra_features[k][start_idx:]
+                        extra_features[k] = extra_features[k][start_idx:end_idx]
         elif voicing_mask is None:
             voicing_mask = np.ones(y_true.shape[0], dtype=np.float32)
 

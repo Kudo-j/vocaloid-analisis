@@ -124,6 +124,7 @@ def eval_song(
     sr=44100,
     shift_length=512,
     remove_intro_silence=True,
+    silence_margin_sec=1.0,
 ):
     """
     1曲分の特徴量データに対してスライディングウィンドウ推論・加重オーバーラップ加算を行い、
@@ -152,6 +153,7 @@ def eval_song(
         sr (int): サンプリング周波数 (デフォルト: 44100)。
         shift_length (int): フレームシフト長 (デフォルト: 512)。
         remove_intro_silence (bool): 波形プロット時にイントロの無音区間をカットするか。
+        silence_margin_sec (float): 波形プロット時に歌唱前後に残す無音の余白（秒、デフォルト: 1.0）。
 
     Returns:
         tuple[np.ndarray, np.ndarray | None]:
@@ -237,6 +239,7 @@ def eval_song(
                 sr=sr,
                 shift_length=shift_length,
                 remove_intro_silence=remove_intro_silence,
+                silence_margin_sec=silence_margin_sec,
             )
 
     return y_pred_full, y_true_full

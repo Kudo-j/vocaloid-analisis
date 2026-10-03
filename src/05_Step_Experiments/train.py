@@ -563,6 +563,7 @@ def evaluate_model(custom_config=None, model_load_path=None):
     TEST_RATIO = config["TEST_RATIO"]
     MODEL_PARAMS = config.get("MODEL_PARAMS", {})
     NUM_TEST_PLOTS = config.get("NUM_TEST_PLOTS", 11)
+    SILENCE_MARGIN_SEC = config.get("SILENCE_MARGIN_SEC", 1.0)
 
     EXPERIMENT_DIR = os.path.join(
         BASE_DIR, OUTPUT_BASE_DIR, EXPERIMENT_NAME, MODEL_TYPE
@@ -659,6 +660,7 @@ def evaluate_model(custom_config=None, model_load_path=None):
             device=device,
             sr=feature_info.get("sr", 44100),
             shift_length=feature_info.get("shift_length", 512),
+            silence_margin_sec=SILENCE_MARGIN_SEC,
         )
 
     # --- 最良・最悪・中央値データの追加プロット ---
@@ -705,6 +707,7 @@ def evaluate_model(custom_config=None, model_load_path=None):
                 device=device,
                 sr=feature_info.get("sr", 44100),
                 shift_length=feature_info.get("shift_length", 512),
+                silence_margin_sec=SILENCE_MARGIN_SEC,
             )
             print(f"  [{label_jp}] {target_song} -> {save_wave_path}")
 
