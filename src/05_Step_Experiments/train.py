@@ -517,6 +517,28 @@ def train_model(custom_config=None, is_tuning=False):
     return best_val_loss
 
 
+def _prepare_song_data(npz_path, plot_extra_features):
+    """NPZファイルから推論用 song_data 辞書を構築するヘルパー関数。"""
+    x_dict, y_dict, voicing_mask = _load_npz_safe(npz_path)
+    if x_dict is None:
+        return None
+
+    extra_features = {}
+    for branch_key, display_name in plot_extra_features.items():
+        if branch_key in x_dict:
+            feat_data = x_dict[branch_key]
+            if feat_data.ndim > 1:
+                feat_data = feat_data[:, 0]
+            extra_features[display_name] = feat_data
+
+    return {
+        "x": x_dict,
+        "y": y_dict,
+        "voicing_mask": voicing_mask,
+        "extra_features": extra_features if extra_features else None,
+    }
+
+
 def evaluate_model(custom_config=None, model_load_path=None):
     if custom_config is None:
         with open(
@@ -538,6 +560,7 @@ def evaluate_model(custom_config=None, model_load_path=None):
     VALID_RATIO = config["VALID_RATIO"]
     TEST_RATIO = config["TEST_RATIO"]
     MODEL_PARAMS = config.get("MODEL_PARAMS", {})
+    NUM_TEST_PLOTS = config.get("NUM_TEST_PLOTS", 11)
 
     EXPERIMENT_DIR = os.path.join(
         BASE_DIR, OUTPUT_BASE_DIR, EXPERIMENT_NAME, MODEL_TYPE
@@ -614,28 +637,12 @@ def evaluate_model(custom_config=None, model_load_path=None):
         npz_path = os.path.join(DATA_DIR, f"{song_name}.npz")
         if not os.path.exists(npz_path):
             continue
-        x_dict, y_dict, voicing_mask = _load_npz_safe(npz_path)
-        if x_dict is None:
+        song_data = _prepare_song_data(npz_path, PLOT_EXTRA_FEATURES)
+        if song_data is None:
             continue
 
-        # 追加特徴量の取得（波形プロット用）
-        extra_features = {}
-        for branch_key, display_name in PLOT_EXTRA_FEATURES.items():
-            if branch_key in x_dict:
-                feat_data = x_dict[branch_key]
-                if feat_data.ndim > 1:
-                    feat_data = feat_data[:, 0]
-                extra_features[display_name] = feat_data
-
-        song_data = {
-            "x": x_dict,
-            "y": y_dict,
-            "voicing_mask": voicing_mask,
-            "extra_features": extra_features if extra_features else None,
-        }
-
         save_wave_path = None
-        if i < 11:
+        if i < NUM_TEST_PLOTS:
             save_wave_path = os.path.join(TEST_EVAL_DIR, f"waveform_{song_name}.png")
 
         eval_song(
@@ -651,6 +658,53 @@ def evaluate_model(custom_config=None, model_load_path=None):
             sr=feature_info.get("sr", 44100),
             shift_length=feature_info.get("shift_length", 512),
         )
+
+    # --- 最良・最悪・中央値データの追加プロット ---
+    if evaluator.results:
+        losses = np.array([r["Total Loss"] for r in evaluator.results])
+        song_names = [r["Song Name"] for r in evaluator.results]
+
+        best_idx = int(np.argmin(losses))
+        worst_idx = int(np.argmax(losses))
+
+        median_val = np.median(losses)
+        median_idx = int(np.argmin(np.abs(losses - median_val)))
+
+        special_plots = [
+            ("best", song_names[best_idx], "精度最良"),
+            ("worst", song_names[worst_idx], "精度最悪"),
+            ("median", song_names[median_idx], "中央値"),
+        ]
+
+        print(f"\n--- 代表データ（最良・最悪・中央値）のプロット生成 ---")
+        for plot_type, target_song, label_jp in special_plots:
+            npz_path = os.path.join(DATA_DIR, f"{target_song}.npz")
+            if not os.path.exists(npz_path):
+                print(f"Warning: 代表データ {npz_path} が見つかりません。")
+                continue
+            song_data = _prepare_song_data(npz_path, PLOT_EXTRA_FEATURES)
+            if song_data is None:
+                continue
+
+            save_wave_path = os.path.join(
+                TEST_EVAL_DIR, f"waveform_{plot_type}_{target_song}.png"
+            )
+
+            # 注意: メインの evaluator の集計結果への二重加算を防ぐため、evaluator=None を指定する
+            eval_song(
+                model=model,
+                song_data=song_data,
+                song_name=f"{target_song} [{label_jp}]",
+                evaluator=None,
+                y_param_names=y_param_names,
+                save_wave_path=save_wave_path,
+                chunk_size=CHUNK_SIZE,
+                chunk_hop=CHUNK_HOP,
+                device=device,
+                sr=feature_info.get("sr", 44100),
+                shift_length=feature_info.get("shift_length", 512),
+            )
+            print(f"  [{label_jp}] {target_song} -> {save_wave_path}")
 
     evaluator.plot_scatter(TEST_EVAL_DIR, EXPERIMENT_NAME, y_param_names)
     excel_path = os.path.join(TEST_EVAL_DIR, f"{EXPERIMENT_NAME}_eval.xlsx")

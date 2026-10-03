@@ -6,6 +6,7 @@
     "PLOT_EXTRA_FEATURES": {
         "audio_rms": "RMS"
     },
+    "NUM_TEST_PLOTS": 11,
     "SPLIT_MODE": "fixed_name",
     "MODEL_TYPE": "cnn_bilstm",
     "LOSS_TYPE": "mse",
