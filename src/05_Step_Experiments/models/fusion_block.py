@@ -24,7 +24,7 @@ class BranchCNN1D(nn.Module):
             out_channels=out_dim,
             kernel_size=kernel_size,
             padding=padding,
-            bias=False,
+            bias=True,
         )
         self.relu = nn.ReLU()
 
@@ -42,13 +42,13 @@ class BranchCNN2D(nn.Module):
         super().__init__()
         # 2次元畳み込み (周波数 x 時間)
         self.conv1 = nn.Conv2d(
-            1, channels, kernel_size=(5, 5), padding=(2, 2), bias=False
+            1, channels, kernel_size=(5, 5), padding=(2, 2), bias=True
         )
         self.relu1 = nn.ReLU()
         self.pool1 = nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1))
 
         self.conv2 = nn.Conv2d(
-            channels, out_dim, kernel_size=(5, 5), padding=(2, 2), bias=False
+            channels, out_dim, kernel_size=(5, 5), padding=(2, 2), bias=True
         )
         self.relu2 = nn.ReLU()
         # 周波数軸を1に集約し、時間軸長は同一に維持
@@ -100,6 +100,7 @@ class FeatureFusionBlock(nn.Module):
             for b_name, b_in_dim in self.x_dims_dict.items():
                 b_type = branch_modules.get(b_name, "none")
                 self.branches[b_name] = self._build_branch(b_type, b_in_dim)
+                dim = b_in_dim if b_type == "none" else self.out_dim
 
             # Noneが混ざっている場合でも、concatなら次元数を計算可能
             total_dim = 0
@@ -123,6 +124,13 @@ class FeatureFusionBlock(nn.Module):
         else:
             raise ValueError(f"Unknown FUSION_STRATEGY: {self.strategy}")
 
+        # 各ブランチのスケールバッファを事前登録（load_state_dictでキーが存在するようにする）
+        sorted_keys = sorted(self.branches.keys())
+        self.register_buffer(
+            "calibrated_scales",
+            torch.ones(len(sorted_keys), dtype=torch.float32) if sorted_keys else None,
+        )
+
     def _build_branch(self, b_type, in_dim):
         if b_type == "none":
             return nn.Identity()
@@ -139,6 +147,103 @@ class FeatureFusionBlock(nn.Module):
         else:
             raise ValueError(f"Unknown branch module type: {b_type}")
 
+    def calibrate(self, data_loader, device):
+        """
+        全訓練データの有声区間（voicing_mask > 0.5）における各ブランチの出力L2ノルムを測定し、
+        初期比率が完全に 1:1:1:... に揃う固定スケーリング係数を register_buffer に登録する。
+        """
+        if self.strategy == "pass_through":
+            return
+
+        self.eval()
+        sorted_keys = sorted(self.branches.keys())
+        num_branches = len(sorted_keys)
+        total_norms = {k: 0.0 for k in sorted_keys}
+        total_voiced_frames = 0
+
+        with torch.no_grad():
+            for batch in data_loader:
+                x_dict, _, mask_batch, _, _, _ = batch
+                mask = mask_batch.to(device).squeeze(-1) > 0.5  # (Batch, Seq)
+                num_voiced = mask.sum().item()
+                if num_voiced == 0:
+                    continue
+                total_voiced_frames += num_voiced
+
+                for k in sorted_keys:
+                    x_val = x_dict[k].to(device)
+                    branch_out = self.branches[k](x_val)
+                    voiced_out = branch_out[mask]
+                    norms = torch.sqrt((voiced_out**2).sum(dim=-1))
+                    total_norms[k] += norms.sum().item()
+
+        if total_voiced_frames == 0:
+            print("[Fusion Calibration] 警告: 有声区間フレームが見つかりませんでした。")
+            scales = torch.ones(num_branches, dtype=torch.float32, device=device)
+        else:
+            scales_list = []
+            print("\n" + "=" * 65)
+            print("[Fusion Calibration] 全訓練データによる静的スケール測定結果:")
+            for k in sorted_keys:
+                mean_norm = total_norms[k] / total_voiced_frames
+                mean_norm = max(mean_norm, 1e-6)
+                scales_list.append(mean_norm)
+                print(
+                    f"  Branch '{k:<15}': 初期平均L2ノルム = {mean_norm:.4f} (固定除算係数 S = {mean_norm:.4f})"
+                )
+            scales = torch.tensor(scales_list, dtype=torch.float32, device=device)
+            print(
+                "  ==> 全ブランチの初期有声L2ノルムを 1.000 (比率 1:1:1:...) に正規化しました。"
+            )
+            print("=" * 65 + "\n")
+
+        if (
+            self.calibrated_scales is not None
+            and self.calibrated_scales.shape == scales.shape
+        ):
+            self.calibrated_scales.copy_(scales)
+        else:
+            self.register_buffer("calibrated_scales", scales)
+
+    def get_current_branch_norms(self, data_loader, device, max_batches=10):
+        """
+        現在の各ブランチの出力L2ノルム（スケーリング適用後）を有声区間で測定して辞書で返す。
+        """
+        if self.strategy == "pass_through":
+            return {}
+
+        self.eval()
+        sorted_keys = sorted(self.branches.keys())
+        total_norms = {k: 0.0 for k in sorted_keys}
+        total_voiced = 0
+
+        with torch.no_grad():
+            for b_idx, batch in enumerate(data_loader):
+                if max_batches is not None and b_idx >= max_batches:
+                    break
+                x_dict, _, mask_batch, _, _, _ = batch
+                mask = mask_batch.to(device).squeeze(-1) > 0.5
+                num_v = mask.sum().item()
+                if num_v == 0:
+                    continue
+                total_voiced += num_v
+
+                for idx, k in enumerate(sorted_keys):
+                    x_val = x_dict[k].to(device)
+                    branch_out = self.branches[k](x_val)
+                    if (
+                        hasattr(self, "calibrated_scales")
+                        and self.calibrated_scales is not None
+                    ):
+                        branch_out = branch_out / self.calibrated_scales[idx]
+                    voiced_out = branch_out[mask]
+                    norms = torch.sqrt((voiced_out**2).sum(dim=-1))
+                    total_norms[k] += norms.sum().item()
+
+        if total_voiced == 0:
+            return {k: 1.0 for k in sorted_keys}
+        return {k: total_norms[k] / total_voiced for k in sorted_keys}
+
     def forward(self, x_dict):
         if self.strategy == "pass_through":
             # 順番を固定して結合
@@ -147,17 +252,21 @@ class FeatureFusionBlock(nn.Module):
 
         processed_tensors = []
         # キーをソートして処理順序を保証
-        for k in sorted(x_dict.keys()):
+        for idx, k in enumerate(sorted(x_dict.keys())):
             x_val = x_dict[k]
             if k in self.branches:
                 x_val = self.branches[k](x_val)
+                if (
+                    hasattr(self, "calibrated_scales")
+                    and self.calibrated_scales is not None
+                ):
+                    x_val = x_val / self.calibrated_scales[idx]
             processed_tensors.append(x_val)
 
         if self.strategy == "late_concat":
             return torch.cat(processed_tensors, dim=-1)
 
         elif self.strategy == "late_add":
-            # Stack and sum
             stacked = torch.stack(
                 processed_tensors, dim=0
             )  # (num_branches, Batch, Seq, Dim)

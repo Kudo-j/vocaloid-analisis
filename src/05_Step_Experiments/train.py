@@ -194,10 +194,6 @@ def train_model(custom_config=None, is_tuning=False):
     total_x_dim = fusion_block.output_dim
 
     print(f"入力ブランチ: {dict(x_dims)} -> Fusion後次元数: {total_x_dim}")
-    if hasattr(fusion_block, "get_branch_weights") and fusion_block.get_branch_weights():
-        init_weights = fusion_block.get_branch_weights()
-        init_weights_str = ", ".join(f"{k}: {w:.4f}" for k, w in init_weights.items())
-        print(f"ブランチ初期重み: {init_weights_str}")
     print(f"出力次元数: {total_y_dim} {dict(y_dims)}")
 
     # --- Coreモデルと統合 ---
@@ -246,31 +242,17 @@ def train_model(custom_config=None, is_tuning=False):
         persistent_workers=False,
     )
 
+    # --- FusionBlock の静的キャリブレーション ---
+    if hasattr(model, "fusion") and hasattr(model.fusion, "calibrate"):
+        model.fusion.calibrate(train_loader, device)
+
     # --- 損失関数とオプティマイザ ---
     criterion = build_loss(LOSS_TYPE).to(device)
     print(f"損失関数: {LOSS_TYPE}")
 
-    # ブランチ重み（branch_scales または branch_logits）が存在する場合は独立した学習率を設定
-    branch_param = getattr(getattr(model, "fusion", None), "branch_scales", None)
-    if branch_param is None:
-        branch_param = getattr(getattr(model, "fusion", None), "branch_logits", None)
-    branch_lr_mult = 30.0  # ブランチ重みの学習率倍率
-
-    if branch_param is not None:
-        base_params = [p for p in model.parameters() if p is not branch_param]
-        optimizer = optim.AdamW(
-            [
-                {"params": base_params, "lr": LR},
-                {"params": [branch_param], "lr": LR * branch_lr_mult},
-            ]
-        )
-        scheduler_max_lr = [MAX_LR, MAX_LR * branch_lr_mult]
-        print(
-            f"オプティマイザ: AdamW (Base LR: {LR}, Branch Weight LR: {LR * branch_lr_mult} [{branch_lr_mult:.0f}x])"
-        )
-    else:
-        optimizer = optim.AdamW(model.parameters(), lr=LR)
-        scheduler_max_lr = MAX_LR
+    optimizer = optim.AdamW(model.parameters(), lr=LR)
+    scheduler_max_lr = MAX_LR
+    print(f"オプティマイザ: AdamW (LR: {LR})")
 
     scaler = GradScaler(enabled=(device_type == "cuda"))
 
@@ -439,6 +421,19 @@ def train_model(custom_config=None, is_tuning=False):
                     f"  Val:   {avg_val_loss:.6f}"
                 )
 
+            # 各ブランチの有声出力L2ノルム（スケーリング後）を測定・表示
+            if hasattr(model, "fusion") and hasattr(
+                model.fusion, "get_current_branch_norms"
+            ):
+                current_norms = model.fusion.get_current_branch_norms(
+                    val_loader, device, max_batches=5
+                )
+                if current_norms:
+                    norms_str = ", ".join(
+                        f"{k}: {v:.4f}" for k, v in current_norms.items()
+                    )
+                    print(f"  Branch L2 Norms (Val): [{norms_str}]")
+
             if epoch == 1:
                 remaining_epochs = EPOCHS - 1
                 estimated_remaining_time_sec = epoch_duration * remaining_epochs
@@ -481,21 +476,13 @@ def train_model(custom_config=None, is_tuning=False):
     if len(train_loss_history) > 0:
         print(f"Best Validation Loss: {best_val_loss:.6f} at Epoch {best_epoch}")
 
-        if hasattr(model, "fusion") and hasattr(model.fusion, "get_branch_weights"):
-            weights = model.fusion.get_branch_weights()
-            if weights:
-                weights_str = ", ".join(f"{k}: {w:.4f}" for k, w in weights.items())
-                print(f"  [Info] 学習完了時のブランチ重み: {weights_str}")
-                # status.txt にもブランチ重みと最良スコアを追記
-                status_file = os.path.join(EXPERIMENT_DIR, "status.txt")
-                try:
-                    with open(status_file, "a", encoding="utf-8") as f:
-                        f.write(f"Branch Weights: {weights_str}\n")
-                        f.write(
-                            f"Best Val Loss: {best_val_loss:.6f} (Epoch {best_epoch})\n"
-                        )
-                except Exception as e:
-                    print(f"  [Warning] status.txt への書き込み失敗: {e}")
+        # status.txt に最良スコアを追記
+        status_file = os.path.join(EXPERIMENT_DIR, "status.txt")
+        try:
+            with open(status_file, "a", encoding="utf-8") as f:
+                f.write(f"Best Val Loss: {best_val_loss:.6f} (Epoch {best_epoch})\n")
+        except Exception as e:
+            print(f"  [Warning] status.txt への書き込み失敗: {e}")
 
         if not is_tuning:
             save_loss_plot(
