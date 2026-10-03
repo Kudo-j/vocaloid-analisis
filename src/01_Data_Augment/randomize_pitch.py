@@ -1,19 +1,27 @@
 """
 randomize_pitch.py
 ==================
-VOCALOID (vsq4) ファイル内の音高（ノート番号）をトラック単位でランダマイズして
-Step 3実験用のVSQXデータセットを一括生成するスクリプト。
+VOCALOID (vsq4) ファイル内の音高（ノート番号）をランダマイズして
+Step 3（音高多様化実験）用のVSQXデータセットを一括生成するスクリプト。
 
 主な機能:
-  1. トラック単位の個別ランダマイズ:
-     1ファイル内に複数トラック（10トラック程度）が存在する場合でも、
-     同一ファイル内のトラック間で重複しないよう個別に音高を割り当て。
-  2. ノートタグ (<n>, <noteNum>) を正規表現で安全に置換（CDATA・XML書式を完全維持）。
-  3. C3(60)〜C6(96) の37音階に対応。
-  4. 母音・データ分割（Train/Valid/Test）を考慮した層化均等サンプリング（偏り・交絡の防止）。
-  5. ファイル名接頭辞（デフォルト: Step3_）の付与。
+  1. サブトラック自動削除 (Track 0 のみ保持):
+     remove_subtracks.py のロジックを取り込み、入力VSQX内の Track 0 (メイン) のみを
+     抽出して Track 1 以降を安全に削除（1ファイル = 1トラック化）。
+  2. ラテン方陣に基づく音素×音高の直交・層化配分:
+     - Train: 同一DYNパターン番号間で5母音の音高が重複しないよう排他制御しつつ、
+       各母音内で音高を均等配分（37音階中30音高を使用、7音高が自動的に未網羅/Unseen化）。
+     - Valid / Test: Trainで網羅できなかった未知音高（Unseen）を指定割合（unseen_ratio）
+       割り当て、残りを既知音高（Seen）から割り当て。同一DYNパターン内での重複も完全回避。
+  3. 音高網羅ベンチマークデータ（Benchmark Test）の一括生成:
+     - 代表DYNパターン（デフォルト: Test_8系）× 5母音 × 全音階（37音高）の計185曲を
+       別枠（benchmark/ サブフォルダ）に一括生成。
+  4. ファイル名への音名付与:
+     - 通常データ: 例 Step3_Train1_あ_1_C3.vsqx
+     - ベンチマークデータ: 例 Step3_Benchmark_Test_あ_8_C3.vsqx
+  5. ノートタグ (<n>, <noteNum>) を正規表現で安全に置換（CDATA・XML書式を完全維持）。
   6. 乱数シード固定による完全な再現性。
-  7. トラック番号・トラック名を含む詳細ログ（CSV）出力。
+  7. 詳細メタデータログ (CSV) 出力（Seen / Unseen フラグ付き）。
 
 使い方:
   1. 下記の CONFIG 領域を確認・編集する
@@ -22,9 +30,11 @@ Step 3実験用のVSQXデータセットを一括生成するスクリプト。
 
 import os
 import re
+import io
 import csv
 import math
 import random
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from collections import defaultdict
 
@@ -33,30 +43,35 @@ from collections import defaultdict
 # 設定領域 (CONFIG) - 実行ボタンを押すだけで動作可能
 # =============================================================================
 CONFIG = {
-    # (必須) 入力VSQXフォルダ (10トラック程度入ったStep_orgのVSQX、または分割済みVSQX)
-    "input_dir": "./data/Step_org/Step2",
+    # (必須) 入力VSQXフォルダ (Step2の分割済みVSQX)
+    "input_dir": "./data/Step2/vsqx",
 
     # (必須) 出力先フォルダ (Step 3のVSQXデータ保存先)
-    "output_dir": "./data/Step_org/Step3",
+    "output_dir": "./data/Step_org/Step3_60-96",
 
     # 音高範囲 (Yamaha規格: C3=60, C6=96, 両端含む37段階)
     "min_note_num": 60,  # C3
     "max_note_num": 96,  # C6
 
-    # サンプリング方式:
-    # "stratified": Split (Train/Valid/Test) 及び母音ごとに均等サンプリング (推奨)
-    # "balanced"  : 全体で均等サンプリング (シャッフル配分)
-    # "uniform"   : 完全一様ランダム (独立な復元抽出)
-    "sampling_mode": "stratified",
+    # 未網羅パターンの配分割合 (Valid/Testで未網羅音高を割り当てる割合, 例: 0.3 = 30%)
+    "unseen_ratio": 0.3,
+
+    # ベンチマーク代表DYNパターン番号 (例: 8 -> Test_8系のデータ)
+    "benchmark_rep_pattern": 8,
 
     # 乱数シード (再現性確保)
     "random_seed": 42,
 
-    # ファイル名接頭辞 (例: "Step3_" -> "Step3_Train1_あ.vsqx")
-    # 空文字 "" にすると接頭辞なし
+    # 通常データのファイル名接頭辞 (例: "Step3_")
     "file_prefix": "Step3_",
 
-    # ログCSVのファイル名 (出力フォルダに保存)
+    # ベンチマークデータのファイル名接頭辞
+    "benchmark_prefix": "Step3_Benchmark_",
+
+    # ベンチマークデータの保存サブフォルダ名
+    "benchmark_subdir": "benchmark",
+
+    # ログCSVのファイル名 (出力フォルダ直下に保存)
     "log_csv_name": "pitch_randomize_log.csv",
 
     # ドライラン設定 (Trueの場合はファイル書き込みを行わずログ・配分のみ表示)
@@ -68,6 +83,7 @@ CONFIG = {
 # 音名リスト (Yamaha表記: ノート番号 60 = C3, 69 = A3)
 PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 VOWEL_LIST = ["あ", "い", "う", "え", "お"]
+VSQ4_XMLNS = "http://www.yamaha.co.jp/vocaloid/schema/vsq4/"
 
 
 def _resolve_dir(path_str: str, base_ref_dir: str = None) -> str:
@@ -114,10 +130,59 @@ def note_num_to_hz(note_num: int) -> float:
     return 440.0 * (2.0 ** ((note_num - 69) / 12.0))
 
 
-def detect_split_and_vowel(filename: str) -> tuple[str, str]:
-    """ファイル名からデータ分割 (Train/Valid/Test) と母音 (あ〜お) を判定する。"""
-    f_lower = filename.lower()
+def remove_subtracks_from_vsqx_content(
+    xml_content: str, xmlns: str = VSQ4_XMLNS
+) -> str:
+    """
+    remove_subtracks.py のロジックを取り込み環境適応:
+    VSQX XMLテキストから Track 0 以外の vsTrack および vsUnit を削除し、
+    Track 0 のみを含む VSQX XML テキストを返す。
+    """
+    ET.register_namespace("", xmlns)
+    ns = {"vsq": xmlns}
+    root = ET.fromstring(xml_content)
 
+    # vsTrackタグをすべて探し、tNoが0でないものを削除
+    tracks_to_remove = []
+    for track in root.findall("vsq:vsTrack", ns):
+        tno_elem = track.find("vsq:tNo", ns)
+        if tno_elem is not None and tno_elem.text != "0":
+            tracks_to_remove.append(track)
+
+    for track in tracks_to_remove:
+        root.remove(track)
+
+    # mixerタグの中のvsUnitもtNoが0でないものを削除
+    mixer = root.find("vsq:mixer", ns)
+    if mixer is not None:
+        units_to_remove = []
+        for unit in mixer.findall("vsq:vsUnit", ns):
+            tno_elem = unit.find("vsq:tNo", ns)
+            if tno_elem is not None and tno_elem.text != "0":
+                units_to_remove.append(unit)
+
+        for unit in units_to_remove:
+            mixer.remove(unit)
+
+    out_io = io.BytesIO()
+    tree = ET.ElementTree(root)
+    tree.write(out_io, encoding="utf-8", xml_declaration=True)
+    return out_io.getvalue().decode("utf-8")
+
+
+def parse_vsqx_metadata(filename: str) -> dict:
+    """ファイル名から split, vowel, dyn_pattern_id を正確に抽出する。"""
+    stem = Path(filename).stem
+
+    # 母音 (あ〜お)
+    vowel = "Other"
+    for v in VOWEL_LIST:
+        if v in stem:
+            vowel = v
+            break
+
+    # Split (Train / Valid / Test)
+    f_lower = stem.lower()
     if "test" in f_lower:
         split = "Test"
     elif "valid" in f_lower:
@@ -127,238 +192,202 @@ def detect_split_and_vowel(filename: str) -> tuple[str, str]:
     else:
         split = "Other"
 
-    vowel = "Other"
-    for v in VOWEL_LIST:
-        if v in filename:
-            vowel = v
-            break
+    # DYNパターンID: 母音部分を除去した共通パターン名
+    # 例: "Train1_あ_1" -> "Train1_1", "Test_あ_8" -> "Test_8"
+    if vowel != "Other":
+        dyn_id = re.sub(rf"_{re.escape(vowel)}_", "_", stem)
+        dyn_id = re.sub(rf"_{re.escape(vowel)}$", "", dyn_id)
+        dyn_id = re.sub(rf"^{re.escape(vowel)}_", "", dyn_id)
+    else:
+        dyn_id = stem
 
-    return split, vowel
+    return {
+        "filename": filename,
+        "stem": stem,
+        "split": split,
+        "vowel": vowel,
+        "dyn_pattern_id": dyn_id,
+    }
 
 
-def scan_tracks_in_vsqx(content: str) -> list[dict]:
+def replace_note_number(content: str, target_note: int) -> tuple[str, int]:
     """
-    VSQXテキストから各 <vsTrack> の情報 (tNo, name, 元ノート番号) を抽出する。
+    VSQX内のノートタグ (<n>, <noteNum>) を指定した音高で置換する。
     """
-    pattern_track = re.compile(r"(<vsTrack>.*?</vsTrack>)", flags=re.DOTALL)
-    pattern_tno = re.compile(r"<tNo>(\d+)</tNo>")
-    pattern_name = re.compile(r"<name><!\[CDATA\[(.*?)\]\]></name>|<name>(.*?)</name>")
     pattern_note = re.compile(r"<(n|noteNum)>(-?\d+)</\1>")
-
-    track_infos = []
-    track_matches = pattern_track.findall(content)
-
-    for idx, t_str in enumerate(track_matches):
-        m_tno = pattern_tno.search(t_str)
-        tno = int(m_tno.group(1)) if m_tno else idx
-
-        m_name = pattern_name.search(t_str)
-        if m_name:
-            tname = m_name.group(1) if m_name.group(1) is not None else m_name.group(2)
-        else:
-            tname = f"Track_{tno}"
-
-        m_note = pattern_note.search(t_str)
-        orig_note = int(m_note.group(2)) if m_note else 69
-
-        track_infos.append({
-            "tNo": tno,
-            "track_name": tname,
-            "original_note": orig_note,
-        })
-
-    return track_infos
-
-
-def replace_notes_per_track(content: str, track_note_map: dict[int, int]) -> tuple[str, int]:
-    """
-    VSQX内の各 <vsTrack> を走査し、tNoに対応する音高で個別に置換する。
-
-    Returns:
-        new_content (str): 置換後のテキスト
-        replaced_count (int): 置換したノートタグの数
-    """
-    pattern_track = re.compile(r"(<vsTrack>.*?</vsTrack>)", flags=re.DOTALL)
-    pattern_note = re.compile(r"<(n|noteNum)>(-?\d+)</\1>")
-    pattern_tno = re.compile(r"<tNo>(\d+)</tNo>")
-
     replaced_count = 0
-    curr_track_idx = 0
 
-    def _sub_track(m_track: re.Match) -> str:
-        nonlocal replaced_count, curr_track_idx
-        track_str = m_track.group(1)
+    def _sub_note(m_note: re.Match) -> str:
+        nonlocal replaced_count
+        replaced_count += 1
+        tag = m_note.group(1)
+        return f"<{tag}>{target_note}</{tag}>"
 
-        m_tno = pattern_tno.search(track_str)
-        tno = int(m_tno.group(1)) if m_tno else curr_track_idx
-        curr_track_idx += 1
-
-        target_note = track_note_map.get(tno)
-        if target_note is None:
-            target_note = track_note_map.get(curr_track_idx - 1)
-
-        if target_note is None:
-            return track_str
-
-        def _sub_note(m_note: re.Match) -> str:
-            nonlocal replaced_count
-            replaced_count += 1
-            tag = m_note.group(1)
-            return f"<{tag}>{target_note}</{tag}>"
-
-        return pattern_note.sub(_sub_note, track_str)
-
-    new_content = pattern_track.sub(_sub_track, content)
+    new_content = pattern_note.sub(_sub_note, content)
     return new_content, replaced_count
 
 
-def _assign_distinct_notes_to_files(
-    file_track_counts: list[tuple[str, int]], available_notes: list[int], rng: random.Random
-) -> dict[str, list[int]]:
+def _allocate_split_with_unseen(
+    split_files: list[dict],
+    unseen_ratio: float,
+    seen_notes_per_vowel: dict[str, set[int]],
+    unseen_notes_per_vowel: dict[str, set[int]],
+    rng: random.Random,
+) -> dict[str, int]:
     """
-    複数ファイルに対し、プールされた音高（全音階均等）を各ファイルに分配する。
-    各ファイル内のトラック数が音階数（37）以下である限り、
-    ファイル内で音高が重複しないことを数学的に保証する。
+    Valid または Test ファイル群に対し、各母音ごとに
+    unseen_ratio の割合で未網羅音高（Unseen）をサンプリングし、
+    残りを既知音高（Seen）からサンプリングした上で、
+    同一DYNパターン内での母音間重複をスワップで解消して割り当てる。
     """
-    total_tracks = sum(count for _, count in file_track_counts)
-    num_notes = len(available_notes)
-    repeats = total_tracks // num_notes
-    remainder = total_tracks % num_notes
+    dyn_pattern_ids = sorted(list(set(f["dyn_pattern_id"] for f in split_files)))
+    num_pats = len(dyn_pattern_ids)
+    unseen_k = round(num_pats * unseen_ratio)
+    seen_k = num_pats - unseen_k
 
-    pool = available_notes * repeats
-    if remainder > 0:
-        pool.extend(rng.sample(available_notes, remainder))
-    rng.shuffle(pool)
+    # 各母音ごとに選択する音高リスト
+    vowel_notes = {}
+    for v in VOWEL_LIST:
+        avail_u = sorted(unseen_notes_per_vowel.get(v, set()))
+        avail_s = sorted(seen_notes_per_vowel.get(v, set()))
 
-    file_buckets = {fid: [] for fid, _ in file_track_counts}
-    target_counts = {fid: count for fid, count in file_track_counts}
+        u_count = min(unseen_k, len(avail_u))
+        s_count = min(seen_k, len(avail_s))
 
-    for note in pool:
-        # この note がまだ入っておらず、枠が空いている候補バケットを探す
-        candidates = [
-            fid
-            for fid, c in target_counts.items()
-            if len(file_buckets[fid]) < c and note not in file_buckets[fid]
-        ]
-        if candidates:
-            # 充填率が最も小さいバケットに割り当ててバランスを取る
-            best_fid = min(
-                candidates, key=lambda fid: len(file_buckets[fid]) / target_counts[fid]
-            )
-            file_buckets[best_fid].append(note)
-        else:
-            # 空きがあるバケットのうち、他バケットとのスワップで重複を回避
-            open_fids = [
-                fid for fid, c in target_counts.items() if len(file_buckets[fid]) < c
-            ]
-            placed = False
-            for target_fid in open_fids:
-                for other_fid in file_buckets:
-                    if (
-                        other_fid != target_fid
-                        and note not in file_buckets[other_fid]
-                        and len(file_buckets[other_fid]) == target_counts[other_fid]
-                    ):
-                        for cand_swap_note in file_buckets[other_fid]:
-                            if cand_swap_note not in file_buckets[target_fid]:
-                                file_buckets[other_fid].remove(cand_swap_note)
-                                file_buckets[other_fid].append(note)
-                                file_buckets[target_fid].append(cand_swap_note)
-                                placed = True
-                                break
-                        if placed:
-                            break
-                if placed:
-                    break
-            if not placed and open_fids:
-                file_buckets[open_fids[0]].append(note)
+        u_chosen = rng.sample(avail_u, u_count) if u_count > 0 else []
+        s_chosen = rng.sample(avail_s, s_count) if s_count > 0 else []
 
-    return file_buckets
+        combined = u_chosen + s_chosen
+        # 足りない場合はSeenから補充
+        while len(combined) < num_pats and avail_s:
+            rem = [n for n in avail_s if n not in combined]
+            if rem:
+                combined.append(rng.choice(rem))
+            else:
+                combined.append(rng.choice(avail_s))
+
+        rng.shuffle(combined)
+        vowel_notes[v] = combined
+
+    # パターン行への初期配置
+    # grid: [{母音: note}, ...] (行数: num_pats)
+    grid = [
+        {v: vowel_notes[v][p_idx] for v in VOWEL_LIST} for p_idx in range(num_pats)
+    ]
+
+    # 行内の重複をスワップで解消
+    for _ in range(300):
+        has_conflict = False
+        for p_idx in range(num_pats):
+            row_notes = [grid[p_idx][v] for v in VOWEL_LIST]
+            if len(row_notes) != len(set(row_notes)):
+                has_conflict = True
+                seen = {}
+                for v in VOWEL_LIST:
+                    n = grid[p_idx][v]
+                    if n in seen:
+                        v_conflict = v
+                        for p_other in range(num_pats):
+                            if p_other != p_idx:
+                                cand = grid[p_other][v_conflict]
+                                row_other = [
+                                    grid[p_other][v2]
+                                    for v2 in VOWEL_LIST
+                                    if v2 != v_conflict
+                                ]
+                                row_this = [
+                                    grid[p_idx][v2]
+                                    for v2 in VOWEL_LIST
+                                    if v2 != v_conflict
+                                ]
+                                if cand not in row_this and n not in row_other:
+                                    grid[p_idx][v_conflict], grid[p_other][v_conflict] = cand, n
+                                    break
+                        break
+                    else:
+                        seen[n] = v
+        if not has_conflict:
+            break
+
+    # ファイル名への割り当てマップを構築
+    # pattern_map: {dyn_pattern_id: {vowel: note}}
+    pattern_map = {
+        dyn_pattern_ids[p_idx]: grid[p_idx] for p_idx in range(num_pats)
+    }
+
+    assignments = {}
+    for f in split_files:
+        assigned = pattern_map[f["dyn_pattern_id"]][f["vowel"]]
+        assignments[f["filename"]] = assigned
+
+    return assignments
 
 
-def allocate_pitches_stratified(
-    files_metadata: list[dict], available_notes: list[int], rng: random.Random
-) -> dict[tuple[str, int], int]:
+def allocate_all_pitches(
+    files_metadata: list[dict],
+    available_notes: list[int],
+    unseen_ratio: float,
+    rng: random.Random,
+) -> tuple[dict[str, int], dict[str, set[int]], dict[str, set[int]]]:
     """
-    Split (Train/Valid/Test) ごとに均等サンプリングを行い、
-    同一ファイル内の全トラックには100%重複のない音高を割り当てる。
-
-    Returns:
-        assignments: {(filename, tNo): assigned_note}
+    全データ分割 (Train/Valid/Test) に対して音高を配分する。
+    - Train: ラテン方陣的シフトで同一DYNパターン間の重複を完全回避。
+    - Valid / Test: unseen_ratio に応じた未網羅音高と既知音高を配分。
     """
     assignments = {}
+    seen_notes_per_vowel = {v: set() for v in VOWEL_LIST}
+    unseen_notes_per_vowel = {v: set() for v in VOWEL_LIST}
 
-    # Split ごとに分類
     split_files = defaultdict(list)
     for fmeta in files_metadata:
         split_files[fmeta["split"]].append(fmeta)
 
-    for split, flist in split_files.items():
-        file_track_counts = [(fmeta["filename"], len(fmeta["tracks"])) for fmeta in flist]
-        file_buckets = _assign_distinct_notes_to_files(file_track_counts, available_notes, rng)
+    # 1. Trainデータの割り当て (ラテン方陣配分)
+    train_files = split_files.get("Train", [])
+    if train_files:
+        train_dyn_ids = sorted(list(set(f["dyn_pattern_id"] for f in train_files)))
+        num_train_pats = len(train_dyn_ids)
+        num_notes = len(available_notes)
 
-        for fmeta in flist:
-            fname = fmeta["filename"]
-            assigned_list = file_buckets[fname]
-            rng.shuffle(assigned_list)
-            for track, note in zip(fmeta["tracks"], assigned_list):
-                assignments[(fname, track["tNo"])] = note
+        # 37音階のランダム順列
+        perm = list(available_notes)
+        rng.shuffle(perm)
 
-    return assignments
+        # 37と互いに素なステップで各母音にシフト適用 (例: 7)
+        shift_step = 7
 
+        train_pattern_map = {}
+        for k_idx, dyn_id in enumerate(train_dyn_ids):
+            train_pattern_map[dyn_id] = {}
+            for v_idx, v in enumerate(VOWEL_LIST):
+                note_idx = (k_idx + v_idx * shift_step) % num_notes
+                note = perm[note_idx]
+                train_pattern_map[dyn_id][v] = note
+                seen_notes_per_vowel[v].add(note)
 
-def allocate_pitches_balanced(
-    files_metadata: list[dict], available_notes: list[int], rng: random.Random
-) -> dict[tuple[str, int], int]:
-    """ファイル全体で均等に複製してシャッフル配分し、同一ファイル内では重複を防ぐ。"""
-    num_notes = len(available_notes)
-    total_tracks = sum(len(fmeta["tracks"]) for fmeta in files_metadata)
-    repeats = total_tracks // num_notes
-    remainder = total_tracks % num_notes
+        for f in train_files:
+            assignments[f["filename"]] = train_pattern_map[f["dyn_pattern_id"]][f["vowel"]]
 
-    pool = available_notes * repeats
-    if remainder > 0:
-        pool.extend(rng.sample(available_notes, remainder))
-    rng.shuffle(pool)
+        for v in VOWEL_LIST:
+            unseen_notes_per_vowel[v] = set(available_notes) - seen_notes_per_vowel[v]
 
-    assignments = {}
-    pool_idx = 0
-    pool_len = len(pool)
+    # 2. Validデータの割り当て
+    valid_files = split_files.get("Valid", [])
+    if valid_files:
+        valid_assigns = _allocate_split_with_unseen(
+            valid_files, unseen_ratio, seen_notes_per_vowel, unseen_notes_per_vowel, rng
+        )
+        assignments.update(valid_assigns)
 
-    for fmeta in files_metadata:
-        filename = fmeta["filename"]
-        file_notes = []
-        for track in fmeta["tracks"]:
-            tno = track["tNo"]
-            found_idx = -1
-            for search_idx in range(pool_idx, pool_len):
-                if pool[search_idx] not in file_notes:
-                    found_idx = search_idx
-                    break
-            if found_idx == -1:
-                found_idx = pool_idx
+    # 3. Testデータの割り当て
+    test_files = split_files.get("Test", [])
+    if test_files:
+        test_assigns = _allocate_split_with_unseen(
+            test_files, unseen_ratio, seen_notes_per_vowel, unseen_notes_per_vowel, rng
+        )
+        assignments.update(test_assigns)
 
-            pool[pool_idx], pool[found_idx] = pool[found_idx], pool[pool_idx]
-            chosen_note = pool[pool_idx]
-            pool_idx += 1
-
-            file_notes.append(chosen_note)
-            assignments[(filename, tno)] = chosen_note
-
-    return assignments
-
-
-def allocate_pitches_uniform(
-    files_metadata: list[dict], available_notes: list[int], rng: random.Random
-) -> dict[tuple[str, int], int]:
-    """各トラックに対して独立に一様乱数（復元抽出）で割り当てる。"""
-    assignments = {}
-    for fmeta in files_metadata:
-        filename = fmeta["filename"]
-        for track in fmeta["tracks"]:
-            tno = track["tNo"]
-            assignments[(filename, tno)] = rng.choice(available_notes)
-    return assignments
+    return assignments, seen_notes_per_vowel, unseen_notes_per_vowel
 
 
 def process_randomize_pitch(config: dict):
@@ -367,22 +396,29 @@ def process_randomize_pitch(config: dict):
     output_dir = _resolve_dir(config["output_dir"], base_ref_dir=input_dir)
     min_note = config.get("min_note_num", 60)
     max_note = config.get("max_note_num", 96)
-    sampling_mode = config.get("sampling_mode", "stratified")
+    unseen_ratio = config.get("unseen_ratio", 0.3)
+    benchmark_rep_pattern = config.get("benchmark_rep_pattern", 8)
     seed = config.get("random_seed", 42)
     file_prefix = config.get("file_prefix", "Step3_")
+    benchmark_prefix = config.get("benchmark_prefix", "Step3_Benchmark_")
+    benchmark_subdir = config.get("benchmark_subdir", "benchmark")
     log_csv_name = config.get("log_csv_name", "pitch_randomize_log.csv")
     dry_run = config.get("dry_run", False)
 
     print("=" * 68)
     print("  VOCALOID VSQX Track-Level Pitch Randomizer (Step 3)")
     print("=" * 68)
-    print(f"Input Directory  : {input_dir}")
-    print(f"Output Directory : {output_dir}")
-    print(f"Pitch Range      : Note {min_note} ({note_num_to_name(min_note)}) 〜 Note {max_note} ({note_num_to_name(max_note)}) [{max_note - min_note + 1} steps]")
-    print(f"Sampling Mode    : {sampling_mode}")
-    print(f"Random Seed      : {seed}")
-    print(f"File Prefix      : '{file_prefix}'")
-    print(f"Dry Run Mode     : {dry_run}")
+    print(f"Input Directory       : {input_dir}")
+    print(f"Output Directory      : {output_dir}")
+    print(f"Benchmark Subdir      : {benchmark_subdir}")
+    print(
+        f"Pitch Range           : Note {min_note} ({note_num_to_name(min_note)}) 〜 "
+        f"Note {max_note} ({note_num_to_name(max_note)}) [{max_note - min_note + 1} steps]"
+    )
+    print(f"Unseen Ratio          : {unseen_ratio * 100:.1f}%")
+    print(f"Benchmark Rep Pattern : Test_{benchmark_rep_pattern} 系")
+    print(f"Random Seed           : {seed}")
+    print(f"Dry Run Mode          : {dry_run}")
     print("=" * 68)
 
     if not os.path.exists(input_dir):
@@ -390,114 +426,158 @@ def process_randomize_pitch(config: dict):
         return False
 
     vsqx_files = sorted(
-        [os.path.join(input_dir, f) for f in os.listdir(input_dir) if f.endswith(".vsqx")]
+        [
+            os.path.join(input_dir, f)
+            for f in os.listdir(input_dir)
+            if f.endswith(".vsqx")
+        ]
     )
 
     if not vsqx_files:
         print(f"[Warning] 入力ディレクトリ内に .vsqx ファイルが見つかりませんでした: {input_dir}")
         return False
 
-    # 1. 各ファイルのトラックメタデータを走査
+    # 1. 各ファイルのメタデータを走査
     files_metadata = []
-    total_tracks_count = 0
-
     for path in vsqx_files:
         filename = os.path.basename(path)
-        split, vowel = detect_split_and_vowel(filename)
+        meta = parse_vsqx_metadata(filename)
+        meta["path"] = path
+        files_metadata.append(meta)
 
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
+    print(f"対象VSQXファイル数: {len(vsqx_files)} 件\n")
 
-        tracks = scan_tracks_in_vsqx(content)
-        total_tracks_count += len(tracks)
-
-        files_metadata.append({
-            "path": path,
-            "filename": filename,
-            "stem": Path(path).stem,
-            "split": split,
-            "vowel": vowel,
-            "content": content,
-            "tracks": tracks,
-        })
-
-    print(f"対象VSQXファイル数: {len(vsqx_files)} 件 (総トラック数: {total_tracks_count} トラック)\n")
-
-    # 2. トラック単位の音高割り当て
+    # 2. 音高の割り当て (ラテン方陣配分 + Unseen配分)
     available_notes = list(range(min_note, max_note + 1))
     rng = random.Random(seed)
 
-    if sampling_mode == "stratified":
-        assignments = allocate_pitches_stratified(files_metadata, available_notes, rng)
-    elif sampling_mode == "balanced":
-        assignments = allocate_pitches_balanced(files_metadata, available_notes, rng)
-    elif sampling_mode == "uniform":
-        assignments = allocate_pitches_uniform(files_metadata, available_notes, rng)
-    else:
-        raise ValueError(f"未知のサンプリングモードです: {sampling_mode}")
+    assignments, seen_notes_per_vowel, unseen_notes_per_vowel = allocate_all_pitches(
+        files_metadata, available_notes, unseen_ratio, rng
+    )
 
     # 3. 出力先ディレクトリの作成
+    benchmark_dir = os.path.join(output_dir, benchmark_subdir)
     if not dry_run:
         os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(benchmark_dir, exist_ok=True)
 
-    # 4. トラック別置換と書き出し
+    # 4. 通常データおよびベンチマークデータの書き出し
     log_rows = []
     success_count = 0
     fail_count = 0
 
-    print("トラック単位で音高置換中...")
+    print("VSQXファイル処理中 (Sub-track削除 & 音高置換)...")
+
+    # (A) 通常データの処理
     for f_idx, fmeta in enumerate(files_metadata):
         orig_filename = fmeta["filename"]
         stem = fmeta["stem"]
         split = fmeta["split"]
         vowel = fmeta["vowel"]
-        content = fmeta["content"]
-        tracks = fmeta["tracks"]
+        dyn_id = fmeta["dyn_pattern_id"]
+        path = fmeta["path"]
 
-        out_filename = f"{file_prefix}{stem}.vsqx"
+        assigned_note = assignments[orig_filename]
+        assigned_name = note_num_to_name(assigned_note)
+        hz = note_num_to_hz(assigned_note)
+        is_seen = (assigned_note in seen_notes_per_vowel.get(vowel, set()))
+
+        out_filename = f"{file_prefix}{stem}_{assigned_name}.vsqx"
         out_path = os.path.join(output_dir, out_filename)
 
-        # このファイルに属するトラックの音高マップ {tNo: target_note}
-        track_note_map = {
-            t["tNo"]: assignments[(orig_filename, t["tNo"])] for t in tracks
-        }
-
         try:
-            new_content, replaced_count = replace_notes_per_track(content, track_note_map)
+            with open(path, "r", encoding="utf-8") as f:
+                raw_content = f.read()
+
+            # Sub-track削除 (Track 0 のみ保持)
+            single_track_content = remove_subtracks_from_vsqx_content(raw_content)
+
+            # 音高置換
+            new_content, replaced_count = replace_note_number(
+                single_track_content, assigned_note
+            )
 
             if not dry_run:
                 with open(out_path, "w", encoding="utf-8") as f:
                     f.write(new_content)
 
-            # トラックごとのログ行を作成
-            for t in tracks:
-                tno = t["tNo"]
-                tname = t["track_name"]
-                orig_note = t["original_note"]
-                assigned_note = track_note_map[tno]
-                shift = assigned_note - orig_note
-                hz = note_num_to_hz(assigned_note)
-
-                log_rows.append({
-                    "file_index": f_idx + 1,
+            log_rows.append(
+                {
+                    "file_index": len(log_rows) + 1,
                     "original_file": orig_filename,
                     "output_file": out_filename,
-                    "track_no": tno,
-                    "track_name": tname,
+                    "is_benchmark": False,
                     "split": split,
                     "vowel": vowel,
-                    "original_note": orig_note,
-                    "original_note_name": note_num_to_name(orig_note),
+                    "dyn_pattern_id": dyn_id,
                     "assigned_note": assigned_note,
-                    "assigned_note_name": note_num_to_name(assigned_note),
+                    "assigned_note_name": assigned_name,
                     "frequency_hz": round(hz, 2),
-                    "semitone_shift": shift,
-                })
-
+                    "is_seen": is_seen,
+                }
+            )
             success_count += 1
 
         except Exception as e:
             print(f"  [Error] 失敗: {orig_filename} -> {e}")
+            fail_count += 1
+
+    # (B) 音高網羅ベンチマークデータの処理 (Test_8系 代表曲 × 37音階)
+    rep_pattern_str = f"Test_{benchmark_rep_pattern}"
+    benchmark_source_files = [
+        f for f in files_metadata
+        if f["split"] == "Test" and f["dyn_pattern_id"] == rep_pattern_str
+    ]
+
+    print(f"\n音高網羅ベンチマークデータ生成中 (代表: {rep_pattern_str}, 5母音 × {len(available_notes)}音高)...")
+    for fmeta in benchmark_source_files:
+        orig_filename = fmeta["filename"]
+        stem = fmeta["stem"]
+        vowel = fmeta["vowel"]
+        dyn_id = fmeta["dyn_pattern_id"]
+        path = fmeta["path"]
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw_content = f.read()
+
+            single_track_content = remove_subtracks_from_vsqx_content(raw_content)
+
+            for note in available_notes:
+                note_name = note_num_to_name(note)
+                hz = note_num_to_hz(note)
+                is_seen = (note in seen_notes_per_vowel.get(vowel, set()))
+
+                out_filename = f"{benchmark_prefix}{stem}_{note_name}.vsqx"
+                out_path = os.path.join(benchmark_dir, out_filename)
+
+                new_content, replaced_count = replace_note_number(
+                    single_track_content, note
+                )
+
+                if not dry_run:
+                    with open(out_path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+
+                log_rows.append(
+                    {
+                        "file_index": len(log_rows) + 1,
+                        "original_file": orig_filename,
+                        "output_file": out_filename,
+                        "is_benchmark": True,
+                        "split": "Benchmark",
+                        "vowel": vowel,
+                        "dyn_pattern_id": dyn_id,
+                        "assigned_note": note,
+                        "assigned_note_name": note_name,
+                        "frequency_hz": round(hz, 2),
+                        "is_seen": is_seen,
+                    }
+                )
+                success_count += 1
+
+        except Exception as e:
+            print(f"  [Error] ベンチマーク生成失敗: {orig_filename} -> {e}")
             fail_count += 1
 
     # 5. ログCSV出力
@@ -511,35 +591,45 @@ def process_randomize_pitch(config: dict):
 
     # 6. 統計サマリー表示
     print("\n" + "=" * 68)
-    print("  処理結果サマリー (トラック単位)")
+    print("  処理結果サマリー")
     print("=" * 68)
-    print(f"ファイル処理数: 成功 {success_count} 件, 失敗 {fail_count} 件 (総トラック数: {len(log_rows)})")
+    print(
+        f"生成ファイル数: 成功 {success_count} 件, 失敗 {fail_count} 件 (総レコード: {len(log_rows)})"
+    )
 
-    # Split別の音高分布
-    split_counter = defaultdict(lambda: defaultdict(int))
+    # Split別のSeen/Unseen統計
+    split_seen_stats = defaultdict(lambda: {"Seen": 0, "Unseen": 0, "Total": 0})
     for row in log_rows:
-        split_counter[row["split"]][row["assigned_note"]] += 1
+        s = row["split"]
+        status = "Seen" if row["is_seen"] else "Unseen"
+        split_seen_stats[s][status] += 1
+        split_seen_stats[s]["Total"] += 1
 
-    for split in sorted(split_counter.keys()):
-        notes_seen = len(split_counter[split])
-        total_in_split = sum(split_counter[split].values())
-        print(f"  - [{split}] 計 {total_in_split} トラック | 出現音高種類数: {notes_seen}/{len(available_notes)} 種類")
+    for s, st in sorted(split_seen_stats.items()):
+        seen_pct = (st["Seen"] / st["Total"] * 100) if st["Total"] > 0 else 0
+        unseen_pct = (st["Unseen"] / st["Total"] * 100) if st["Total"] > 0 else 0
+        print(
+            f"  - [{s}] 計 {st['Total']} 件 | Seen: {st['Seen']} 件 ({seen_pct:.1f}%), "
+            f"Unseen: {st['Unseen']} 件 ({unseen_pct:.1f}%)"
+        )
 
-    # 同一ファイル内の音高重複チェック
-    file_note_tracker = defaultdict(list)
+    # 同一DYNパターン内の音高重複チェック (通常データ)
+    pattern_note_map = defaultdict(lambda: defaultdict(list))
     for row in log_rows:
-        file_note_tracker[row["output_file"]].append(row["assigned_note"])
+        if not row["is_benchmark"]:
+            pattern_note_map[row["split"]][row["dyn_pattern_id"]].append(row["assigned_note"])
 
-    has_intra_duplicates = False
-    for fname, notes in file_note_tracker.items():
-        if len(notes) != len(set(notes)):
-            has_intra_duplicates = True
-            break
+    has_dup = False
+    for s, pmap in pattern_note_map.items():
+        for pid, notes in pmap.items():
+            if len(notes) != len(set(notes)):
+                has_dup = True
+                break
 
-    if not has_intra_duplicates:
-        print("  ★ 同一ファイル内の全トラックで音高重複なし (完全に異なる音高を配分)")
+    if not has_dup:
+        print("  ★ 同一DYNパターン内の全母音間で音高重複なし (完全排他・多様性を保証)")
     else:
-        print("  ※ 一部ファイルでトラック数が音階数を超えたため音高が重複しています")
+        print("  ※ 一部パターンで音高重複が検出されました")
 
     print("=" * 68)
     return True
