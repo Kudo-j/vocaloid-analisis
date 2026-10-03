@@ -5,9 +5,10 @@ VOCALOID (vsq4) ファイル内の音高（ノート番号）をランダマイ�
 Step 3（音高多様化実験）用のVSQXデータセットを一括生成するスクリプト。
 
 主な機能:
-  1. サブトラック自動削除 (Track 0 のみ保持):
-     remove_subtracks.py のロジックを取り込み、入力VSQX内の Track 0 (メイン) のみを
-     抽出して Track 1 以降を安全に削除（1ファイル = 1トラック化）。
+  1. 正規表現による安全なサブトラック自動削除 (Track 0 のみ保持):
+     XMLパーサを通さず完全な正規表現テキスト処理で Track 0 (メイン) のみを残し
+     Track 1 以降を安全に削除。<![CDATA[...]]> セクション、XML宣言 (standalone="no")、
+     タブインデント、改行構造を 100% 完全に維持して VOCALOID ソフトでの互換性を保証。
   2. ラテン方陣に基づく音素×音高の直交・層化配分:
      - Train: 同一DYNパターン番号間で5母音の音高が重複しないよう排他制御しつつ、
        各母音内で音高を均等配分（37音階中30音高を使用、7音高が自動的に未網羅/Unseen化）。
@@ -16,10 +17,12 @@ Step 3（音高多様化実験）用のVSQXデータセットを一括生成す�
   3. 音高網羅ベンチマークデータ（Benchmark Test）の一括生成:
      - 代表DYNパターン（デフォルト: Test_8系）× 5母音 × 全音階（37音高）の計185曲を
        別枠（benchmark/ サブフォルダ）に一括生成。
-  4. ファイル名への音名付与:
-     - 通常データ: 例 Step3_Train1_あ_1_C3.vsqx
-     - ベンチマークデータ: 例 Step3_Benchmark_Test_あ_8_C3.vsqx
-  5. ノートタグ (<n>, <noteNum>) を正規表現で安全に置換（CDATA・XML書式を完全維持）。
+  4. ファイル名への安全な音名サフィックス付与:
+     - DAWやVOCALOIDでのパス誤認を防ぐため、シャープ記号 '#' を 's' に置換した安全表記を採用
+       (例: Note 61 -> Cs3, Note 66 -> Fs4)。
+     - 通常データ: 例 Step3_Train1_あ_1_Cs3.vsqx
+     - ベンチマークデータ: 例 Step3_Benchmark_Test_あ_8_Cs3.vsqx
+  5. ノートタグ (<n>, <noteNum>) を正規表現で安全に置換。
   6. 乱数シード固定による完全な再現性。
   7. 詳細メタデータログ (CSV) 出力（Seen / Unseen フラグ付き）。
 
@@ -30,11 +33,9 @@ Step 3（音高多様化実験）用のVSQXデータセットを一括生成す�
 
 import os
 import re
-import io
 import csv
 import math
 import random
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from collections import defaultdict
 
@@ -47,10 +48,10 @@ CONFIG = {
     "input_dir": "./data/Step2/vsqx",
 
     # (必須) 出力先フォルダ (Step 3のVSQXデータ保存先)
-    "output_dir": "./data/Step_org/Step3_60-96",
+    "output_dir": "./data/Step_org/Step3_67-96",
 
     # 音高範囲 (Yamaha規格: C3=60, C6=96, 両端含む37段階)
-    "min_note_num": 60,  # C3
+    "min_note_num": 67,  # C3
     "max_note_num": 96,  # C6
 
     # 未網羅パターンの配分割合 (Valid/Testで未網羅音高を割り当てる割合, 例: 0.3 = 30%)
@@ -83,7 +84,6 @@ CONFIG = {
 # 音名リスト (Yamaha表記: ノート番号 60 = C3, 69 = A3)
 PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 VOWEL_LIST = ["あ", "い", "う", "え", "お"]
-VSQ4_XMLNS = "http://www.yamaha.co.jp/vocaloid/schema/vsq4/"
 
 
 def _resolve_dir(path_str: str, base_ref_dir: str = None) -> str:
@@ -119,10 +119,16 @@ def _resolve_dir(path_str: str, base_ref_dir: str = None) -> str:
 
 
 def note_num_to_name(note_num: int) -> str:
-    """MIDIノート番号をYamaha音名表記 (例: 60 -> C3, 69 -> A3) に変換する。"""
+    """MIDIノート番号をYamaha音名表記 (例: 60 -> C3, 61 -> C#3) に変換する。"""
     pitch = PITCH_NAMES[note_num % 12]
     octave = (note_num // 12) - 2  # 60 // 12 - 2 = 3 (C3)
     return f"{pitch}{octave}"
+
+
+def note_num_to_safe_name(note_num: int) -> str:
+    """ファイル名として安全な音名表記 (例: 61 -> Cs3, 66 -> Fs4) に変換する。"""
+    raw_name = note_num_to_name(note_num)
+    return raw_name.replace("#", "s")
 
 
 def note_num_to_hz(note_num: int) -> float:
@@ -130,44 +136,34 @@ def note_num_to_hz(note_num: int) -> float:
     return 440.0 * (2.0 ** ((note_num - 69) / 12.0))
 
 
-def remove_subtracks_from_vsqx_content(
-    xml_content: str, xmlns: str = VSQ4_XMLNS
-) -> str:
+def remove_subtracks_pure_regex(vsqx_text: str) -> str:
     """
-    remove_subtracks.py のロジックを取り込み環境適応:
-    VSQX XMLテキストから Track 0 以外の vsTrack および vsUnit を削除し、
-    Track 0 のみを含む VSQX XML テキストを返す。
+    正規表現テキスト処理により、Track 0 以外の vsTrack および vsUnit を安全に削除する。
+    ElementTree などの XML パーサを通さないため、<![CDATA[...]]> セクション、
+    XML 宣言 (standalone="no")、タブインデント、改行構造を 100% 完全に維持する。
     """
-    ET.register_namespace("", xmlns)
-    ns = {"vsq": xmlns}
-    root = ET.fromstring(xml_content)
+    # 1. vsTrack ブロックを分割・走査し、tNo が 0 のトラックのみを残す
+    parts = re.split(r"(<vsTrack>.*?</vsTrack>)", vsqx_text, flags=re.DOTALL)
+    new_parts = []
+    for part in parts:
+        if part.startswith("<vsTrack>"):
+            m_tno = re.search(r"<tNo>(\d+)</tNo>", part)
+            if m_tno and m_tno.group(1) == "0":
+                new_parts.append(part)
+        else:
+            new_parts.append(part)
+    res = "".join(new_parts)
 
-    # vsTrackタグをすべて探し、tNoが0でないものを削除
-    tracks_to_remove = []
-    for track in root.findall("vsq:vsTrack", ns):
-        tno_elem = track.find("vsq:tNo", ns)
-        if tno_elem is not None and tno_elem.text != "0":
-            tracks_to_remove.append(track)
+    # 2. mixer 内の vsUnit のうち tNo != 0 のものを削除
+    def _sub_unit(m: re.Match) -> str:
+        u_str = m.group(1)
+        m_tno = re.search(r"<tNo>(\d+)</tNo>", u_str)
+        if m_tno and m_tno.group(1) != "0":
+            return ""
+        return u_str
 
-    for track in tracks_to_remove:
-        root.remove(track)
-
-    # mixerタグの中のvsUnitもtNoが0でないものを削除
-    mixer = root.find("vsq:mixer", ns)
-    if mixer is not None:
-        units_to_remove = []
-        for unit in mixer.findall("vsq:vsUnit", ns):
-            tno_elem = unit.find("vsq:tNo", ns)
-            if tno_elem is not None and tno_elem.text != "0":
-                units_to_remove.append(unit)
-
-        for unit in units_to_remove:
-            mixer.remove(unit)
-
-    out_io = io.BytesIO()
-    tree = ET.ElementTree(root)
-    tree.write(out_io, encoding="utf-8", xml_declaration=True)
-    return out_io.getvalue().decode("utf-8")
+    res = re.sub(r"(<vsUnit>.*?</vsUnit>\s*)", _sub_unit, res, flags=re.DOTALL)
+    return res
 
 
 def parse_vsqx_metadata(filename: str) -> dict:
@@ -212,7 +208,7 @@ def parse_vsqx_metadata(filename: str) -> dict:
 
 def replace_note_number(content: str, target_note: int) -> tuple[str, int]:
     """
-    VSQX内のノートタグ (<n>, <noteNum>) を指定した音高で置換する。
+    Track 0 内のノートタグ (<n>, <noteNum>) を指定した音高で置換する。
     """
     pattern_note = re.compile(r"<(n|noteNum)>(-?\d+)</\1>")
     replaced_count = 0
@@ -310,7 +306,6 @@ def _allocate_split_with_unseen(
             break
 
     # ファイル名への割り当てマップを構築
-    # pattern_map: {dyn_pattern_id: {vowel: note}}
     pattern_map = {
         dyn_pattern_ids[p_idx]: grid[p_idx] for p_idx in range(num_pats)
     }
@@ -466,7 +461,7 @@ def process_randomize_pitch(config: dict):
     success_count = 0
     fail_count = 0
 
-    print("VSQXファイル処理中 (Sub-track削除 & 音高置換)...")
+    print("VSQXファイル処理中 (正規表現Sub-track削除 & 音高置換)...")
 
     # (A) 通常データの処理
     for f_idx, fmeta in enumerate(files_metadata):
@@ -479,18 +474,19 @@ def process_randomize_pitch(config: dict):
 
         assigned_note = assignments[orig_filename]
         assigned_name = note_num_to_name(assigned_note)
+        safe_name = note_num_to_safe_name(assigned_note)
         hz = note_num_to_hz(assigned_note)
         is_seen = (assigned_note in seen_notes_per_vowel.get(vowel, set()))
 
-        out_filename = f"{file_prefix}{stem}_{assigned_name}.vsqx"
+        out_filename = f"{file_prefix}{stem}_{safe_name}.vsqx"
         out_path = os.path.join(output_dir, out_filename)
 
         try:
             with open(path, "r", encoding="utf-8") as f:
                 raw_content = f.read()
 
-            # Sub-track削除 (Track 0 のみ保持)
-            single_track_content = remove_subtracks_from_vsqx_content(raw_content)
+            # 正規表現による安全なSub-track削除 (Track 0 のみ保持, CDATA完全維持)
+            single_track_content = remove_subtracks_pure_regex(raw_content)
 
             # 音高置換
             new_content, replaced_count = replace_note_number(
@@ -541,14 +537,16 @@ def process_randomize_pitch(config: dict):
             with open(path, "r", encoding="utf-8") as f:
                 raw_content = f.read()
 
-            single_track_content = remove_subtracks_from_vsqx_content(raw_content)
+            # 正規表現による安全なSub-track削除
+            single_track_content = remove_subtracks_pure_regex(raw_content)
 
             for note in available_notes:
                 note_name = note_num_to_name(note)
+                safe_name = note_num_to_safe_name(note)
                 hz = note_num_to_hz(note)
                 is_seen = (note in seen_notes_per_vowel.get(vowel, set()))
 
-                out_filename = f"{benchmark_prefix}{stem}_{note_name}.vsqx"
+                out_filename = f"{benchmark_prefix}{stem}_{safe_name}.vsqx"
                 out_path = os.path.join(benchmark_dir, out_filename)
 
                 new_content, replaced_count = replace_note_number(

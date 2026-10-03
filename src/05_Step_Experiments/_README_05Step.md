@@ -24,6 +24,8 @@
   指定された `MODEL_DIR` 内の学習済みDNNモデル（`best_model.pth`）、設定（`train_config.json`）、および特徴量情報（`features.json`）をロードし、スライディングウィンドウ（Overlap-Add）方式でオーバーラップ加算平均を行いながら推論を実施後、予測値を書き込んだVSQXを出力する。
 - **`plot_rendered_eval.py`**
   予測VSQXをVocaloidソフトで音声化（レンダリング）した結果（予測WAV）と正解データを詳細に比較するスクリプト。上段にDYNパラメータ、下段にRMS音響特徴量の比較波形をプロットする。
+- **`evaluate_pitch_benchmark.py`**
+  Step 3（音高多様化実験）専用の音高網羅ベンチマーク評価スクリプト。学習済みモデルを用いて全37音階×5母音（185曲）を推論し、正解vs予測の比較プロット（PNG）を保存するとともに、`pitch_randomize_log.csv` と突合して Seen（既知） vs Unseen（未知）や音高別・母音別の誤差（MSE/MAE/相関係数）を集計し、高品質なExcelレポートを出力する。
 - **`models/`**
   ニューラルネットワークモデルの定義コード群を格納するディレクトリ。以下に詳述。
 
