@@ -246,7 +246,9 @@ class Evaluator:
             ax.legend(loc="upper right")
             ax.grid(True, alpha=0.3)
 
-        # --- 追加特徴量 (RMSなど) のプロット ---
+        # --- 追加特徴量 (RMS、Melスペクトログラムなど) のプロット ---
+        colorbar_configs = []
+        has_2d_feat = False
         if extra_features:
             for idx, (feat_name, feat_data) in enumerate(extra_features.items()):
                 ax = axes[num_dims + idx]
@@ -254,21 +256,50 @@ class Evaluator:
                 # 無音区間のグレー背景
                 self._shade_unvoiced(ax, time_axis, voicing_mask)
 
-                ax.plot(
-                    time_axis,
-                    feat_data,
-                    label=feat_name,
-                    color="forestgreen",
-                    linewidth=1.5,
-                )
-
-                ax.set_title(f"入力特徴量 (Input Feature): {feat_name}")
-                ax.set_ylabel("Value")
-                ax.legend(loc="upper right")
-                ax.grid(True, alpha=0.3)
+                # 1次元特徴量 (RMS, 全ラウドネス, F0 など) は折れ線グラフ
+                if feat_data.ndim == 1 or (feat_data.ndim == 2 and feat_data.shape[1] == 1):
+                    y_plot = feat_data.squeeze()
+                    ax.plot(
+                        time_axis,
+                        y_plot,
+                        label=feat_name,
+                        color="forestgreen",
+                        linewidth=1.5,
+                    )
+                    ax.set_title(f"入力特徴量 (Input Feature): {feat_name}")
+                    ax.set_ylabel("Value")
+                    ax.legend(loc="upper right")
+                    ax.grid(True, alpha=0.3)
+                # 2次元特徴量 (Mel, Bark, CQT, STFT など) はスペクトログラム（ヒートマップ）表示
+                elif feat_data.ndim == 2 and feat_data.shape[1] > 1:
+                    has_2d_feat = True
+                    n_bins = feat_data.shape[1]
+                    mesh = ax.pcolormesh(
+                        time_axis,
+                        np.arange(n_bins),
+                        feat_data.T,
+                        shading="auto",
+                        cmap="magma",
+                    )
+                    ax.set_title(
+                        f"入力特徴量 (Input Spectrogram): {feat_name} ({n_bins} bins)"
+                    )
+                    ax.set_ylabel(f"{feat_name} Bin")
+                    colorbar_configs.append((ax, mesh))
 
         axes[-1].set_xlabel("Time (s)")
-        plt.tight_layout()
+
+        if has_2d_feat:
+            # 2次元特徴量がある場合、右側にカラーバー用の余白を確保してtight_layout
+            plt.tight_layout(rect=[0, 0, 0.88, 1.0])
+            for target_ax, mesh_obj in colorbar_configs:
+                pos = target_ax.get_position()
+                cax = fig.add_axes([0.90, pos.y0, 0.018, pos.height])
+                cbar = fig.colorbar(mesh_obj, cax=cax)
+                cbar.set_label("Intensity", fontsize=9)
+        else:
+            plt.tight_layout()
+
         plt.savefig(save_path, dpi=150)
         plt.close()
         print(f"波形グラフを保存しました: {save_path}")

@@ -527,8 +527,10 @@ def _prepare_song_data(npz_path, plot_extra_features):
     for branch_key, display_name in plot_extra_features.items():
         if branch_key in x_dict:
             feat_data = x_dict[branch_key]
-            if feat_data.ndim > 1:
+            # 1次元 (T, 1) の場合は (T,) にフラット化
+            if feat_data.ndim == 2 and feat_data.shape[1] == 1:
                 feat_data = feat_data[:, 0]
+            # 多次元 (T, D) (D > 1) の場合はスペクトログラム描画のためそのまま保持
             extra_features[display_name] = feat_data
 
     return {
