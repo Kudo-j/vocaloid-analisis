@@ -44,6 +44,19 @@ class AudioFeatureExtractor:
             "cepstrum": {"n_fft": 1024, "n_coef": 40},
             "smoothed_cepstrum": {"n_fft": 1024, "n_coef": 40},
             "lpc": {"order": 32},  # LPC次数 (声道フィルタの推定精度)
+            "bark": {
+                "n_barks": 24,
+                "n_fft": 1024,
+                "compression": "power",  # "power" (Stevensべき乗則 0.33) または "db"
+                "power_exponent": 0.33,
+                "use_equal_loudness": True,
+            },
+            "loudness": {
+                "n_barks": 24,
+                "n_fft": 1024,
+                "power_exponent": 0.33,
+                "use_equal_loudness": True,
+            },
         }
 
     def _load_audio(self, wav_path):
@@ -163,7 +176,9 @@ class AudioFeatureExtractor:
 
     def _compute_rms(self, y):
         params = self.config["rms"]
-        rms = librosa.feature.rms(y=y, frame_length=params["frame_length"], hop_length=self.shift_length)
+        rms = librosa.feature.rms(
+            y=y, frame_length=params["frame_length"], hop_length=self.shift_length
+        )
         # # 振幅をdB表記に変換 (ref=1.0) (線形スケールで学習するために無効化)
         # rms_db = librosa.amplitude_to_db(rms, ref=1.0, top_db=None)
         # return rms_db.T
@@ -334,6 +349,109 @@ class AudioFeatureExtractor:
             y=y, frame_length=params["frame_length"], hop_length=self.shift_length
         ).T
 
+    # --- バーク尺度および等ラウドネス補正ヘルパー ---
+    def _get_bark_filterbank(self, n_fft, n_barks=24):
+        """
+        Traunmuller (1990) の式に基づく24バンド臨界帯域三角フィルタバンク行列を生成。
+        Returns:
+            fb (np.ndarray): (n_barks, n_fft // 2 + 1)
+            freqs (np.ndarray): (n_fft // 2 + 1,)
+        """
+        freqs = np.fft.rfftfreq(n_fft, 1.0 / self.sr)
+        # Traunmuller (1990): z = 26.81 * f / (1960 + f) - 0.53
+        bark_freqs = np.maximum(0.0, 26.81 * freqs / (1960.0 + freqs) - 0.53)
+        centers = np.linspace(1.0, 24.0, n_barks)
+        fb = np.zeros((n_barks, len(freqs)), dtype=np.float32)
+        for i, c in enumerate(centers):
+            # 三角フィルタ（帯域幅 +-1 Bark）
+            fb[i] = np.maximum(0.0, 1.0 - np.abs(bark_freqs - c))
+        return fb, freqs
+
+    def _get_equal_loudness_curve(self, freqs):
+        """
+        Terhardt (1979) / ISO 226 近似による等ラウドネス周波数重み付け曲線（40 phon基準）。
+        1kHz〜4kHzを強調し、低域と超高域を減衰させる。
+        """
+        f_sq = freqs**2
+        with np.errstate(divide="ignore", invalid="ignore"):
+            eq = ((f_sq + 1.44e6) * (freqs**4)) / (
+                ((f_sq + 1.6e5) ** 2) * (f_sq + 9.61e6)
+            )
+            eq[0] = 0.0
+        max_val = np.max(eq)
+        if max_val > 0:
+            eq /= max_val
+        return eq.astype(np.float32)
+
+    # --- バークスペクトログラム (比ラウドネス分布: 24次元) ---
+    def _compute_bark_spectrogram(self, y):
+        """
+        24次元のバークスペクトログラム（比ラウドネスまたはBarkパワースペクトル）。
+        メルスペクトログラムの比較・代替用。
+        """
+        params = self.config["bark"]
+        n_fft = params["n_fft"]
+        n_barks = params["n_barks"]
+        use_eq = params["use_equal_loudness"]
+        compression = params["compression"]
+        exponent = params["power_exponent"]
+
+        # STFT パワースペクトル (|D|^2)
+        D = librosa.stft(y, n_fft=n_fft, hop_length=self.shift_length)
+        power_spec = np.abs(D) ** 2
+
+        # フィルタバンクと等ラウドネス曲線
+        fb, freqs = self._get_bark_filterbank(n_fft, n_barks)
+        if use_eq:
+            eq = self._get_equal_loudness_curve(freqs)
+            power_spec = power_spec * eq[:, None]
+
+        # Bark帯域エネルギー集約 (n_barks, frames)
+        bark_energy = np.dot(fb, power_spec)
+
+        if compression == "power":
+            # Stevensのべき法則による比ラウドネス (Sone/Bark相当)
+            spec_loudness = np.maximum(bark_energy, 1e-10) ** exponent
+            return spec_loudness.T
+        elif compression == "db":
+            # 対数dB表現
+            ref_val = self.config.get("global_stft_ref", np.max)
+            use_top_db = (
+                None if isinstance(ref_val, (int, float, np.floating)) else 80.0
+            )
+            bark_db = librosa.power_to_db(bark_energy, ref=ref_val, top_db=use_top_db)
+            return bark_db.T
+        else:
+            return bark_energy.T
+
+    # --- 全知覚ラウドネス (Total Loudness: 1次元) ---
+    def _compute_loudness(self, y):
+        """
+        1次元の全知覚ラウドネス（Total Loudness, 単位: Sone相当）。
+        全24バーク帯域の比ラウドネスの総和。RMSの比較・代替用。
+        """
+        params = self.config["loudness"]
+        n_fft = params["n_fft"]
+        n_barks = params["n_barks"]
+        use_eq = params["use_equal_loudness"]
+        exponent = params["power_exponent"]
+
+        # STFT パワースペクトル (|D|^2)
+        D = librosa.stft(y, n_fft=n_fft, hop_length=self.shift_length)
+        power_spec = np.abs(D) ** 2
+
+        fb, freqs = self._get_bark_filterbank(n_fft, n_barks)
+        if use_eq:
+            eq = self._get_equal_loudness_curve(freqs)
+            power_spec = power_spec * eq[:, None]
+
+        bark_energy = np.dot(fb, power_spec)
+        # 各臨界帯域の比ラウドネス (Sone/Bark)
+        spec_loudness = np.maximum(bark_energy, 1e-10) ** exponent
+        # 全臨界帯域の積分（総和）= 全ラウドネス
+        total_loudness = np.sum(spec_loudness, axis=0, keepdims=True)
+        return total_loudness.T
+
     # --- LPC残差（音源信号）抽出 ---
     def _compute_lpc_residual(self, y):
         """
@@ -424,7 +542,11 @@ class AudioFeatureExtractor:
         """
         residual = self._compute_lpc_residual(y)
         params = self.config["rms"]
-        rms = librosa.feature.rms(y=residual, frame_length=params["frame_length"], hop_length=self.shift_length)
+        rms = librosa.feature.rms(
+            y=residual,
+            frame_length=params["frame_length"],
+            hop_length=self.shift_length,
+        )
         rms_db = librosa.amplitude_to_db(rms, ref=1.0, top_db=None)
         return rms_db.T
 
@@ -502,6 +624,10 @@ class AudioFeatureExtractor:
                 feat = self._compute_source_rms(y)
             elif f_type == "source_stft":
                 feat = self._compute_source_stft(y)
+            elif f_type == "bark":
+                feat = self._compute_bark_spectrogram(y)
+            elif f_type == "loudness":
+                feat = self._compute_loudness(y)
             else:
                 raise ValueError(f"Unknown feature type: {f_type}")
 
@@ -524,10 +650,21 @@ class AudioFeatureExtractor:
             return self.config["mfcc"]["n_mfcc"]
         elif f_type in ["cqt", "cqt_framenorm"]:
             return self.config["cqt"]["n_bins"]
-        elif f_type in ["rms", "source_rms", "f0_world", "f0_crepe", 
-                        "spectral_centroid", "spectral_bandwidth", 
-                        "hnr", "zero_crossing_rate", "waveform"]:
+        elif f_type in [
+            "rms",
+            "source_rms",
+            "f0_world",
+            "f0_crepe",
+            "spectral_centroid",
+            "spectral_bandwidth",
+            "hnr",
+            "zero_crossing_rate",
+            "waveform",
+            "loudness",
+        ]:
             return 1
+        elif f_type in ["bark", "bark_spectrogram"]:
+            return self.config["bark"]["n_barks"]
         elif f_type == "spectral_contrast":
             return 7
         elif f_type in ["stft", "source_stft"]:
