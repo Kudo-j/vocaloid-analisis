@@ -40,7 +40,8 @@ from openpyxl.utils import get_column_letter
 
 # --- パス設定 ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.join(SCRIPT_DIR, "..", "util"))
+sys.path.append(os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "util")))
+sys.path.append(os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "05_Step_Experiments")))
 
 from feature_extractor import AudioFeatureExtractor
 from vsqx_dnn_formatter import VSQXDNNFormatter
@@ -90,18 +91,13 @@ def _resolve_path(path_str: str, base_ref: str = None) -> str:
         return os.path.abspath(path_str)
 
     # 1. 26Voca_Ana プロジェクトルート基準（親フォルダまたはパス自体が存在する場合を最優先）
-    proj_root = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
-    cand3 = os.path.normpath(os.path.join(proj_root, path_str.lstrip("./\\")))
-    if os.path.exists(cand3) or os.path.exists(os.path.dirname(cand3)):
-        return os.path.abspath(cand3)
+    for up_levels in [4, 3, 2, 1]:
+        proj_root = os.path.normpath(os.path.join(SCRIPT_DIR, *[".."] * up_levels))
+        cand = os.path.normpath(os.path.join(proj_root, path_str.lstrip("./\\")))
+        if os.path.exists(cand) or os.path.exists(os.path.dirname(cand)):
+            return os.path.abspath(cand)
 
-    # 2. 親ディレクトリ（ワークスペースルート）基準
-    root_dir = os.path.normpath(os.path.join(SCRIPT_DIR, "..", ".."))
-    cand2 = os.path.normpath(os.path.join(root_dir, path_str.lstrip("./\\")))
-    if os.path.exists(cand2):
-        return os.path.abspath(cand2)
-
-    # 3. スクリプトディレクトリ基準
+    # 2. スクリプトディレクトリ基準
     cand1 = os.path.normpath(os.path.join(SCRIPT_DIR, path_str))
     if os.path.exists(cand1):
         return os.path.abspath(cand1)
