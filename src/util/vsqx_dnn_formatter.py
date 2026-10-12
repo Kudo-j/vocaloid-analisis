@@ -318,10 +318,26 @@ class VSQXDNNFormatter(VSQXParser):
             flat_normalized[pid] = norm_val
 
         # 3. Melody
+        voicing_mask = raw_data.get("voicing_mask", None)
+        if voicing_mask is not None:
+            is_voiced = voicing_mask.reshape(-1) > 0.0
+        else:
+            is_voiced = raw_data["melody"].get("NOTE_NUMBER", np.array([])) > 0.0
+
         for pid, val in raw_data["melody"].items():
             max_v = self.vsqx_config["NOTE_PARAM_MAX_VALUES"].get(pid, 1.0)
             if pid == "NOTE_NUMBER":
-                norm_val = ((val / max_v) * 2.0 - 1.0)[:, np.newaxis]
+                # 3次元滑らか音高螺旋 (Pitch Helix)
+                # 成分1, 2 (Chroma X, Chroma Y): 12平均律の周期性 (単位円座標)
+                # 成分3 (Pitch Height Z): 音高の絶対的な高さ (-1.0 〜 1.0)
+                # 休符区間 (is_voiced == False) では Chroma は (0.0, 0.0)（原点＝無音）、Z は -1.0 とする
+                theta = 2.0 * np.pi * (val % 12.0) / 12.0
+                chroma_x = np.where(is_voiced, np.cos(theta), 0.0).astype(np.float32)
+                chroma_y = np.where(is_voiced, np.sin(theta), 0.0).astype(np.float32)
+                height_z = np.where(
+                    is_voiced, (val / max_v) * 2.0 - 1.0, -1.0
+                ).astype(np.float32)
+                norm_val = np.stack([chroma_x, chroma_y, height_z], axis=-1)
             else:
                 norm_val = (val / max_v)[:, np.newaxis]
             flat_normalized[pid] = norm_val

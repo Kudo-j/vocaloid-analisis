@@ -102,7 +102,7 @@ def _resolve_dir(path_str: str, base_ref_dir: str = None) -> str:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     for start in [os.getcwd(), script_dir]:
         curr = start
-        for _ in range(4):
+        for _ in range(6):
             clean_rel = path_str.lstrip("./\\")
             candidate = os.path.normpath(os.path.join(curr, clean_rel))
             if os.path.exists(candidate) or os.path.exists(os.path.dirname(candidate)):

@@ -19,7 +19,7 @@ FIGSIZE = (18, 28)  # 出力画像サイズ (インチ)
 
 # ===== 音声設定 =====
 SR = 44100
-SHIFT_LENGTH = 256
+SHIFT_LENGTH = 512
 
 # ===== 注目パラメータ =====
 # None → vsqx_A と vsqx_B のCC差分を自動検出して全て表示
