@@ -43,9 +43,9 @@ plt.rcParams["axes.unicode_minus"] = False
 class VowelDiffVisualizer:
     """母音間パラメータ影響差異の可視化"""
 
-    def __init__(self, sr=44100, hop_length=256):
+    def __init__(self, sr=44100, shift_length=256):
         self.sr = sr
-        self.hop_length = hop_length
+        self.shift_length = shift_length
 
     # =================================================================
     # ヘルパー
@@ -54,7 +54,7 @@ class VowelDiffVisualizer:
     def _get_time_axis(self, total_frames):
         """フレーム数から時間軸を生成"""
         return librosa.frames_to_time(
-            np.arange(total_frames), sr=self.sr, hop_length=self.hop_length
+            np.arange(total_frames), sr=self.sr, hop_length=self.shift_length
         )
 
     def _shade_non_singing_regions(self, ax, notes, t_start, t_end):

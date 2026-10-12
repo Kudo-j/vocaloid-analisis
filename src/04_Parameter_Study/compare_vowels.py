@@ -34,9 +34,11 @@ from itertools import combinations
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "..", "util"))
 
 import vowel_compare_config as cfg
-from vsqx_reader import VSQXReader
+from vsqx_parser import VSQXParser
+from vsqx_compare import VSQXCompare
 from audio_analyzer import AudioAnalyzer, FEATURE_DISPLAY_NAMES, FEATURE_PLOT_TYPES
 from vowel_diff_visualizer import VowelDiffVisualizer
 
@@ -125,7 +127,8 @@ def _find_param_files(prefix, param_name, data_dir):
 def _get_target_params():
     """解析対象パラメータのリストを返す"""
     if "ALL" in cfg.TARGET_PARAMS:
-        return cfg.DYNAMIC_PARAM_IDS
+        parser = VSQXParser(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
+        return parser.vsqx_config["DYNAMIC_PARAM_IDS"]
     return cfg.TARGET_PARAMS
 
 
@@ -232,7 +235,7 @@ def _analyze_single_condition(condition, param_name, data_dir,
     # パラメータカーブ
     default_value = cfg.DEFAULT_DYNAMIC_VALUES.get(param_name, 64)
     control_points = vsqx_b["dynamic_params"].get(param_name, [])
-    param_curve = reader.interpolate_param_to_frames(
+    param_curve = reader.interpolate_to_frames(
         control_points, total_frames, default_value=default_value
     )
 
@@ -284,9 +287,9 @@ def main():
     print(f"  Features:    {feature_list}")
     print(f"  Conditions:  {len(cfg.VOWEL_CONDITIONS)}")
 
-    reader = VSQXReader(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
-    analyzer = AudioAnalyzer(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
-    visualizer = VowelDiffVisualizer(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+    reader = VSQXCompare(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
+    analyzer = AudioAnalyzer(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
+    visualizer = VowelDiffVisualizer(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
 
     for param_name in target_params:
         print(f"\n{'='*60}")

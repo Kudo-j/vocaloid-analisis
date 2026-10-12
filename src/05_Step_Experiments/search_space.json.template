@@ -1,0 +1,72 @@
+{
+    "tune_config": {
+        "MODELS_TO_TUNE": [
+            "cnn_bilstm",
+            "bilstm_base"
+        ],
+        "N_TRIALS_PER_MODEL": 50,
+        "STORAGE_PATH": "sqlite:///optuna_study.db"
+    },
+    "common": {
+        "LR": {
+            "type": "log_float",
+            "low": 1e-5,
+            "high": 5e-3
+        },
+        "MAX_LR": {
+            "type": "log_float",
+            "low": 1e-4,
+            "high": 5e-3
+        },
+        "ACCUM_STEPS": {
+            "type": "categorical",
+            "choices": [
+                1,
+                2,
+                4,
+                8
+            ]
+        }
+    },
+    "cnn_bilstm": {
+        "conv_channels": {
+            "type": "categorical",
+            "choices": [
+                32,
+                64
+            ]
+        },
+        "kernel_size": {
+            "type": "categorical",
+            "choices": [
+                1,
+                3,
+                4,
+                5,
+                9,
+                11,
+                13
+            ]
+        },
+        "num_layers": {
+            "type": "int",
+            "low": 1,
+            "high": 4
+        }
+    },
+    "bilstm_base": {
+        "hidden_dim": {
+            "type": "categorical",
+            "choices": [
+                32,
+                64,
+                128
+            ]
+        },
+        "num_layers": {
+            "type": "int",
+            "low": 1,
+            "high": 4
+        }
+    }
+}

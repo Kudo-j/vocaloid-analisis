@@ -22,10 +22,10 @@ FEATURES_JSON = os.path.join(DATA_DIR, "features.json")
 # ★追加: 異常値を移動させる先のフォルダ
 OUTLIER_DIR = os.path.join(DATA_DIR, "outlier")
 # ★追加: 実際にファイルを移動させるかどうか (Falseなら移動せずリスト出力のみ)
-MOVE_OUTLIERS = True
+MOVE_OUTLIERS = False
 
 # 分析設定
-CHECK_NUM_FILES = 0  # 詳細チェック(画像作成)する数
+CHECK_NUM_FILES = 10  # 詳細チェック(画像作成)する数
 ANALYSIS_NUM_FILES = 5000  # 統計チェックする数
 SEARCH_WINDOW_SEC = 1.0  # 探索範囲 ±n秒
 CORR_THRESHOLD = -1.0  # 信頼度足切りライン
@@ -44,12 +44,17 @@ def load_feature_info():
 
 
 def get_feature_indices(feature_info):
-    x_map = feature_info["x_feature_map"]
+    x_map = feature_info.get("x_feature_map", [])
     indices = {
         "audio": {"start": -1, "dim": 0},
         "note": {"start": -1, "dim": 0},
         "phoneme": {"start": -1, "dim": 0},
     }
+    
+    # 新フォーマット（マルチブランチの辞書型）の場合は直接 audio_env と voicing_mask を使うため不要
+    if isinstance(x_map, dict):
+        return indices
+
     current_idx = 0
     for feat in x_map:
         name = feat["name"]
@@ -114,7 +119,7 @@ def binarize_audio_envelope(
     return gate.astype(np.float64)
 
 
-def extract_f0_from_wav(wav_path, sr, hop_length, length_frames):
+def extract_f0_from_wav(wav_path, sr, shift_length, length_frames):
     try:
         y, _ = librosa.load(wav_path, sr=sr)
         f0, _, _ = librosa.pyin(
@@ -122,7 +127,7 @@ def extract_f0_from_wav(wav_path, sr, hop_length, length_frames):
             fmin=librosa.note_to_hz("C2"),
             fmax=librosa.note_to_hz("C7"),
             sr=sr,
-            hop_length=hop_length,
+            shift_length=shift_length,
         )
         f0 = np.nan_to_num(f0)
         if len(f0) < length_frames:
@@ -196,7 +201,7 @@ def visualize_detail(
     ax.legend(loc="upper right")
 
     plt.tight_layout()
-    plt.savefig(f"debug_detail_{name}.png")
+    plt.savefig(os.path.join(OUTLIER_DIR, f"debug_detail_{name}.png"))
     plt.close()
 
 
@@ -204,11 +209,6 @@ def move_outliers(outliers_df):
     """異常値ファイルを指定フォルダに移動する"""
     if outliers_df.empty:
         return
-
-    # 移動先フォルダ作成
-    if not os.path.exists(OUTLIER_DIR):
-        os.makedirs(OUTLIER_DIR)
-        print(f"Created directory: {OUTLIER_DIR}")
 
     print(f"\nMoving {len(outliers_df)} files to {OUTLIER_DIR} ...")
 
@@ -244,9 +244,12 @@ def analyze_alignment():
     if info is None:
         return
 
+    # ★追加: レポートや画像を保存するための出力フォルダをあらかじめ作成
+    os.makedirs(OUTLIER_DIR, exist_ok=True)
+
     indices = get_feature_indices(info)
     sr = info.get("sr", 24000)
-    hop = info.get("hop_length", 128)
+    hop = info.get("shift_length", 128)
     sec_per_frame = hop / sr
     ms_per_frame = sec_per_frame * 1000
 
@@ -263,17 +266,15 @@ def analyze_alignment():
         try:
             filename = os.path.basename(fpath).replace(".npz", "")
             with np.load(fpath) as data:
-                x = data["x"]
-                # 必要なデータを取り出したらインデントの中で処理
-                # ★修正: preprocess.pyで新たに保存するようにした 'audio_env' があればそれを使う
+                # ★修正: 新フォーマットでは 'x' が存在しないため、audio_env を先にチェック
                 if "audio_env" in data:
                     audio_env = data["audio_env"].flatten()
                 else:
                     # 過去のデータとの互換性用（特徴量から直接平均を取る）
+                    x = data["x"]
                     idx_a, dim_a = indices["audio"]["start"], indices["audio"]["dim"]
                     audio_env = np.mean(x[:, idx_a : idx_a + dim_a], axis=1)
 
-                # 【修正】xから探すのではなく、voicing_maskを直接ゲートとして使う
                 if "voicing_mask" in data:
                     note_gate = data["voicing_mask"].flatten()
                 else:
@@ -321,13 +322,11 @@ def analyze_alignment():
         try:
             filename = os.path.basename(fpath).replace(".npz", "")
             with np.load(fpath) as data:
-                x = data["x"]
-                # 必要なデータを取り出したらインデントの中で処理
-                # ★修正: preprocess.pyで新たに保存するようにした 'audio_env' があればそれを使う
                 if "audio_env" in data:
                     audio_env = data["audio_env"].flatten()
                 else:
                     # 過去のデータとの互換性用
+                    x = data["x"]
                     idx_a, dim_a = indices["audio"]["start"], indices["audio"]["dim"]
                     audio_env = np.mean(x[:, idx_a : idx_a + dim_a], axis=1)
 
@@ -388,8 +387,8 @@ def analyze_alignment():
     ax2.scatter(df_valid["lag_frame"], df_valid["corr"], alpha=0.5, s=15)
     ax2.set_title("信頼度 vs ズレ")
     plt.tight_layout()
-    plt.savefig("alignment_stats.png")
-    print("Graphs saved.")
+    plt.savefig(os.path.join(OUTLIER_DIR, "alignment_stats.png"))
+    print(f"Graphs saved to {OUTLIER_DIR}.")
 
     # ★追加: 異常ファイルの移動
     outliers = df_valid[df_valid["abs_lag"] >= OUTLIER_THRESHOLD]
@@ -397,8 +396,8 @@ def analyze_alignment():
         print(
             f"\n【検出】 {OUTLIER_THRESHOLD}フレーム以上ずれているファイル: {len(outliers)}件"
         )
-        outliers.to_csv("alignment_outliers.csv", index=False)
-        print("  CSV saved.")
+        outliers.to_csv(os.path.join(OUTLIER_DIR, "alignment_outliers.csv"), index=False)
+        print(f"  CSV saved to {OUTLIER_DIR}.")
 
         if MOVE_OUTLIERS:
             move_outliers(outliers)

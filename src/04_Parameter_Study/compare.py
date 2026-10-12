@@ -18,9 +18,10 @@ import numpy as np
 # srcをパスに追加
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "..", "util"))
 
 import compare_config as cfg
-from vsqx_reader import VSQXReader
+from vsqx_compare import VSQXCompare
 from audio_analyzer import AudioAnalyzer
 from diff_visualizer import DiffVisualizer
 
@@ -41,8 +42,11 @@ def _select_top_features(sorted_features, correlations):
     - ALWAYS_INCLUDE_FEATURES は順位・グループ制限を無視して追加
     """
     # waveform を除外
-    ranked = [(f, info) for f, info in sorted_features
-              if f not in ("waveform", "waveform_diff")]
+    ranked = [
+        (f, info)
+        for f, info in sorted_features
+        if f not in ("waveform", "waveform_diff")
+    ]
 
     top_n = getattr(cfg, "TOP_N_FEATURES", None)
     always_include = set(getattr(cfg, "ALWAYS_INCLUDE_FEATURES", []))
@@ -134,21 +138,37 @@ def main():
 
     # --- 2. VSQX解析 ---
     print("\n[Step 1] Parsing VSQX files...")
-    reader = VSQXReader(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+    reader = VSQXCompare(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
 
-    vsqx_data_a = reader.read(path_vsqx_a)
-    vsqx_data_b = reader.read(path_vsqx_b)
+    vsqx_data_a = reader.read_sparse(path_vsqx_a)
+    vsqx_data_b = reader.read_sparse(path_vsqx_b)
 
     if vsqx_data_a is None or vsqx_data_b is None:
         print("ERROR: Failed to parse VSQX files.")
         sys.exit(1)
 
-    print(f"  VSQX_A: tempo={vsqx_data_a['tempo']}BPM, "
-          f"notes={len(vsqx_data_a['notes'])}, "
-          f"dynamic_params={list(vsqx_data_a['dynamic_params'].keys())}")
-    print(f"  VSQX_B: tempo={vsqx_data_b['tempo']}BPM, "
-          f"notes={len(vsqx_data_b['notes'])}, "
-          f"dynamic_params={list(vsqx_data_b['dynamic_params'].keys())}")
+    # read_sparse の結果に可視化用フィールドを追加
+    # (diff_visualizer は start_sec / end_sec / tempo を参照するため)
+    for data in [vsqx_data_a, vsqx_data_b]:
+        data["tempo"] = data["tempo_map"][0][1] if data["tempo_map"] else 120.0
+        for note in data["notes"]:
+            note["start_sec"] = reader.tick_to_second(
+                note["abs_start_tick"], data["tempo_map"], data["resolution"]
+            )
+            note["end_sec"] = reader.tick_to_second(
+                note["abs_end_tick"], data["tempo_map"], data["resolution"]
+            )
+
+    print(
+        f"  VSQX_A: tempo={vsqx_data_a['tempo_map'][0][1]}BPM, "
+        f"notes={len(vsqx_data_a['notes'])}, "
+        f"dynamic_params={list(vsqx_data_a['dynamic_params'].keys())}"
+    )
+    print(
+        f"  VSQX_B: tempo={vsqx_data_b['tempo_map'][0][1]}BPM, "
+        f"notes={len(vsqx_data_b['notes'])}, "
+        f"dynamic_params={list(vsqx_data_b['dynamic_params'].keys())}"
+    )
 
     # --- 3. パラメータ決定 ---
     if cfg.TARGET_PARAM is not None:
@@ -182,7 +202,7 @@ def main():
 
     print(f"\n[Step 3] Extracting audio features (Paired for consistent dB ref)...")
     print(f"  Target features ({len(extract_features)}): {extract_features}")
-    analyzer = AudioAnalyzer(sr=cfg.SR, hop_length=cfg.HOP_LENGTH)
+    analyzer = AudioAnalyzer(sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH)
 
     print(f"  Processing both files to find common reference...")
     features_a, features_b = analyzer.extract_features_paired(
@@ -198,8 +218,7 @@ def main():
     # --- 6. 各パラメータについて解析・可視化 ---
     os.makedirs(output_dir, exist_ok=True)
     visualizer = DiffVisualizer(
-        sr=cfg.SR, hop_length=cfg.HOP_LENGTH,
-        figsize=cfg.FIGSIZE, dpi=cfg.DPI
+        sr=cfg.SR, shift_length=cfg.SHIFT_LENGTH, figsize=cfg.FIGSIZE, dpi=cfg.DPI
     )
 
     for param_name in target_params:
@@ -218,8 +237,9 @@ def main():
 
         # VSQXパラメータをフレーム単位に補間
         control_points_b = vsqx_data_b["dynamic_params"].get(param_name, [])
-        param_curve = reader.interpolate_param_to_frames(
-            control_points_b, total_frames, default_value=default_value
+        param_curve = reader.interpolate_to_frames(
+            control_points_b, vsqx_data_b["tempo_map"], vsqx_data_b["resolution"],
+            total_frames, default_value=default_value
         )
 
         # --- 6a. 相関分析 ---
@@ -239,13 +259,16 @@ def main():
 
             # 全相関結果を表示
             from audio_analyzer import FEATURE_DISPLAY_NAMES
+
             feature_groups = getattr(cfg, "FEATURE_GROUPS", {})
             feat_to_group = {}
             for gn, members in feature_groups.items():
                 for m in members:
                     feat_to_group[m] = gn
 
-            print(f"\n  {'Feature':<25} {'Group':<14} {'r':>8} {'|r|':>8} {'Strength':>10} {'Output':>8}")
+            print(
+                f"\n  {'Feature':<25} {'Group':<14} {'r':>8} {'|r|':>8} {'Strength':>10} {'Output':>8}"
+            )
             print(f"  {'-'*80}")
 
             # 出力対象を選出
@@ -259,11 +282,15 @@ def main():
                 group = feat_to_group.get(fname, "-")
                 r = info["r"]
                 r_abs = abs(r)
-                strength = "Strong" if r_abs >= 0.7 else (
-                    "Moderate" if r_abs >= 0.4 else "Weak"
+                strength = (
+                    "Strong"
+                    if r_abs >= 0.7
+                    else ("Moderate" if r_abs >= 0.4 else "Weak")
                 )
                 mark = "  ✓" if fname in output_names else ""
-                print(f"  {display:<25} {group:<14} {r:>8.4f} {r_abs:>8.4f} {strength:>10} {mark:>8}")
+                print(
+                    f"  {display:<25} {group:<14} {r:>8.4f} {r_abs:>8.4f} {strength:>10} {mark:>8}"
+                )
 
             # waveform を先頭に挿入（波形オーバーレイのみ、差分なし）
             sorted_features.insert(
@@ -306,15 +333,23 @@ def main():
 
         # --- 6c. CSV出力 ---
         if cfg.COMPUTE_CORRELATION:
-            csv_path = os.path.join(output_dir, f"{base_b}_correlation_{param_name}.csv")
+            csv_path = os.path.join(
+                output_dir, f"{base_b}_correlation_{param_name}.csv"
+            )
             _save_correlation_csv(csv_path, sorted_features, param_name)
             print(f"  Saved CSV: {csv_path}")
 
         # --- 6d. JSONメタデータ ---
         json_path = os.path.join(output_dir, f"{base_b}_analysis_{param_name}.json")
         _save_analysis_json(
-            json_path, param_name, cfg, vsqx_data_a, vsqx_data_b,
-            correlations, static_diffs, compute_features
+            json_path,
+            param_name,
+            cfg,
+            vsqx_data_a,
+            vsqx_data_b,
+            correlations,
+            static_diffs,
+            compute_features,
         )
         print(f"  Saved JSON: {json_path}")
 
@@ -330,8 +365,9 @@ def _save_correlation_csv(csv_path, sorted_features, param_name):
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["parameter", "feature", "r_value", "abs_r", "p_value",
-                         "strength"])
+        writer.writerow(
+            ["parameter", "feature", "r_value", "abs_r", "p_value", "strength"]
+        )
 
         for fname, info in sorted_features:
             if fname in ("waveform", "waveform_diff"):
@@ -340,15 +376,24 @@ def _save_correlation_csv(csv_path, sorted_features, param_name):
             r = info["r"]
             r_abs = abs(r)
             p = info["p"]
-            strength = "Strong" if r_abs >= 0.7 else (
-                "Moderate" if r_abs >= 0.4 else "Weak"
+            strength = (
+                "Strong" if r_abs >= 0.7 else ("Moderate" if r_abs >= 0.4 else "Weak")
             )
-            writer.writerow([param_name, display, f"{r:.6f}",
-                           f"{r_abs:.6f}", f"{p:.6f}", strength])
+            writer.writerow(
+                [param_name, display, f"{r:.6f}", f"{r_abs:.6f}", f"{p:.6f}", strength]
+            )
 
 
-def _save_analysis_json(json_path, param_name, cfg, vsqx_a, vsqx_b,
-                         correlations, static_diffs, computed_features):
+def _save_analysis_json(
+    json_path,
+    param_name,
+    cfg,
+    vsqx_a,
+    vsqx_b,
+    correlations,
+    static_diffs,
+    computed_features,
+):
     """解析メタデータをJSON出力"""
     meta = {
         "param_name": param_name,
@@ -357,12 +402,12 @@ def _save_analysis_json(json_path, param_name, cfg, vsqx_a, vsqx_b,
         "vsqx_a": cfg.VSQX_A,
         "vsqx_b": cfg.VSQX_B,
         "sr": cfg.SR,
-        "hop_length": cfg.HOP_LENGTH,
+        "shift_length": cfg.SHIFT_LENGTH,
         "feature_types": computed_features,
         "top_n": getattr(cfg, "TOP_N_FEATURES", None),
         "always_include": getattr(cfg, "ALWAYS_INCLUDE_FEATURES", []),
         "always_exclude": getattr(cfg, "ALWAYS_EXCLUDE_FEATURES", []),
-        "tempo": vsqx_b.get("tempo", 0),
+        "tempo": vsqx_b["tempo_map"][0][1] if vsqx_b.get("tempo_map") else 0,
         "voice_a": vsqx_a.get("voice_info", {}),
         "voice_b": vsqx_b.get("voice_info", {}),
         "static_param_diffs": {

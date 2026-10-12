@@ -14,11 +14,18 @@ from typing import Dict, List, Any, Optional
 import sys
 import os
 
-# 02_Preprocess フォルダへのパスを追加
+# 02_Preprocess および util フォルダへのパスを追加
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "02_Preprocess")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "util")))
 
 import config
-from preprocess import VSQXPreprocessor
+from vsqx_dnn_formatter import VSQXDNNFormatter
+from vsqx_parser import VSQXParser
+from feature_extractor import AudioFeatureExtractor
+
+# VSQX仕様の取得
+_dummy_parser = VSQXParser(sr=44100, shift_length=256)
+VSQX_SPEC = _dummy_parser.vsqx_config
 from model_encoder import TransformerModel
 from train_encoder import (
     D_MODEL,
@@ -70,7 +77,7 @@ def denormalize_value(value: float, param_id: str) -> int:
     configの設定値を使用する。
     """
     # 1. Dynamic Parameters
-    if param_id in config.DYNAMIC_PARAM_IDS:
+    if param_id in VSQX_SPEC["DYNAMIC_PARAM_IDS"]:
         if param_id == "PIT":
             # PITは -8192 ~ 8191 (中心0)
             return int(value * 8192.0)
@@ -83,8 +90,8 @@ def denormalize_value(value: float, param_id: str) -> int:
             return int(np.clip(val, 0, 127))
 
     # 2. Note Parameters
-    elif param_id in config.NOTE_PARAM_IDS:
-        max_val = config.NOTE_PARAM_MAX_VALUES.get(param_id, 127.0)
+    elif param_id in VSQX_SPEC["NOTE_PARAM_IDS"]:
+        max_val = VSQX_SPEC["NOTE_PARAM_MAX_VALUES"].get(param_id, 127.0)
         if param_id in ["fallPort", "risePort"]:
             # 0.0 ~ 1.0
             return int(np.clip(value * max_val, 0, 127))
@@ -104,7 +111,7 @@ def update_vsqx_xml(
     output_path: str,
     predictions: Dict[str, np.ndarray],
     sr: int,
-    hop_length: int,
+    shift_length: int,
     audio_start_tick: int = 1920 * 4,
 ):
     """
@@ -146,7 +153,7 @@ def update_vsqx_xml(
 
         # --- 1. 既存パラメータの削除 ---
         # 予測対象のタグID一覧 (DYN -> D)
-        inv_map = {v: k for k, v in config.ID_MAPPING.items()}
+        inv_map = {v: k for k, v in VSQX_SPEC["ID_MAPPING"].items()}
         target_tag_ids = set()
         for param_id in predictions.keys():
             tag_id = inv_map.get(param_id)
@@ -205,7 +212,7 @@ def update_vsqx_xml(
 
                 # 時刻変換
                 time_sec = librosa.frames_to_time(
-                    frame_idx, sr=sr, hop_length=hop_length
+                    frame_idx, sr=sr, hop_length=shift_length
                 )
                 audio_tick = time_sec * bpm * resolution / 60.0
 
@@ -285,7 +292,7 @@ def plot_predictions_with_gt(
     voicing_mask: Optional[np.ndarray],
     plot_output_path: str,
     sr: int,
-    hop_length: int,
+    shift_length: int,
 ):
     """
     予測値と正解値を比較する3枚のグラフを生成する。
@@ -296,7 +303,7 @@ def plot_predictions_with_gt(
     無声区間（voicing_mask == 0）は灰色背景で表示し、MAE計算から除外する。
     """
     # 5秒間に対応するフレーム数
-    window_frames = int(5.0 * sr / hop_length)
+    window_frames = int(5.0 * sr / shift_length)
 
     for pid, pred_vals in predictions.items():
         if pid not in ground_truth:
@@ -330,7 +337,7 @@ def plot_predictions_with_gt(
 
         # 時間軸 (秒)
         time_axis = librosa.frames_to_time(
-            np.arange(min_len), sr=sr, hop_length=hop_length
+            np.arange(min_len), sr=sr, hop_length=shift_length
         )
 
         # --- ウィンドウの特定 ---
@@ -522,16 +529,22 @@ def predict_vsqx(args):
     print(f"Model input dim: {num_x_features}, output dim: {num_y_features}")
 
     # 2. Preprocessorの初期化
-    preprocessor = VSQXPreprocessor()
+    preprocessor = VSQXDNNFormatter(sr=config.SR, shift_length=config.SHIFT_LENGTH)
+    audio_extractor = AudioFeatureExtractor(sr=config.SR, shift_length=config.SHIFT_LENGTH)
+    
+    # 注入
+    preprocessor.vsqx_config["INPUT_VSQX_PARAMS"] = config.INPUT_VSQX_PARAMS
+    preprocessor.vsqx_config["TARGET_PARAM_CONFIG"] = config.TARGET_PARAM_CONFIG
     preprocessor.set_phoneme_map(feature_info["phoneme_map"])
 
     # 3. 入力データの作成 (X)
     print("Processing input files...")
 
     # A. 音声 (features.jsonに記録された特徴量タイプを使用)
-    feature_types = feature_info.get("feature_types", config.FEATURE_TYPES)
+    default_audio_features = [f for features in config.INPUT_AUDIO_PARAMS.values() for f in features]
+    feature_types = feature_info.get("feature_types", default_audio_features)
     print(f"  Audio feature types: {feature_types}")
-    audio_features = preprocessor.extractor.get_features(args.wav_path, feature_types)
+    audio_features = audio_extractor.get_features(args.wav_path, feature_types)
     audio_features = np.nan_to_num(stats.zscore(audio_features, axis=0))
     total_frames = audio_features.shape[0]
 
@@ -550,16 +563,18 @@ def predict_vsqx(args):
     norm_vsqx = preprocessor.normalize_features(raw_vsqx)
 
     # C. 特徴量の結合
-    input_param_ids = preprocessor._flatten_input_config(config.INPUT_VSQX_PARAMS)
+    input_param_ids = []
+    for p_list in config.INPUT_VSQX_PARAMS.values():
+        input_param_ids.extend(p_list)
 
     X_list = [audio_features]
 
     for pid in input_param_ids:
-        data, _ = preprocessor._get_feature_data(pid, norm_vsqx)
-        if data is not None:
-            X_list.append(data)
-        else:
-            print(f"Warning: Input parameter '{pid}' not found in VSQX.")
+        if pid not in norm_vsqx:
+            print(f"\n【致命的なエラー】設定ミス: 推論に必要な入力パラメータ '{pid}' が見つかりません。config.py の記述を確認してください。")
+            sys.exit(1)
+        data = norm_vsqx[pid]
+        X_list.append(data)
 
     X_input = np.concatenate(X_list, axis=-1).astype(np.float32)
 
@@ -638,7 +653,7 @@ def predict_vsqx(args):
         output_path=args.output_path,
         predictions=predictions,
         sr=config.SR,
-        hop_length=config.HOP_LENGTH,
+        shift_length=config.SHIFT_LENGTH,
         audio_start_tick=AUDIO_START_TICK,
     )
 
@@ -651,7 +666,7 @@ def predict_vsqx(args):
             # parse_vsqx + normalize_features は既に実行済み (norm_vsqx)
             # ターゲットパラメータの正解値を抽出
             for pid in predictions.keys():
-                gt_data, _ = preprocessor._get_feature_data(pid, norm_vsqx)
+                gt_data = norm_vsqx.get(pid)
                 if gt_data is not None:
                     if gt_data.ndim == 2 and gt_data.shape[1] == 1:
                         gt_data = gt_data.flatten()
@@ -675,7 +690,7 @@ def predict_vsqx(args):
             voicing_mask=voicing_mask,
             plot_output_path=args.plot_output_path,
             sr=config.SR,
-            hop_length=config.HOP_LENGTH,
+            shift_length=config.SHIFT_LENGTH,
         )
 
     print("Prediction process finished.")

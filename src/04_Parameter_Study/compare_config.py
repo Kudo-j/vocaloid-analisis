@@ -7,19 +7,19 @@
 DATA_NAME = "あ"
 Para_id = "DYN"
 
-WAV_A = f"./src_result/Para_Study_data/wav/default/{DATA_NAME}_default.wav"  # パラメータなしの歌唱音声
-WAV_B = f"./src_result/Para_Study_data/wav/DYN/{DATA_NAME}_{Para_id}.wav"  # パラメータありの歌唱音声
-VSQX_A = f"./src_result/Para_Study_data/vsqx/default/{DATA_NAME}_default.vsqx"  # パラメータなしのVSQX
-VSQX_B = f"./src_result/Para_Study_data/vsqx/DYN/{DATA_NAME}_{Para_id}.vsqx"  # パラメータありのVSQX
+WAV_A = f"./Para_Study_data/wav/default/{DATA_NAME}_default.wav"  # パラメータなしの歌唱音声
+WAV_B = f"./Para_Study_data/wav/DYN/{DATA_NAME}_{Para_id}.wav"  # パラメータありの歌唱音声
+VSQX_A = f"./Para_Study_data/vsqx/default/{DATA_NAME}_default.vsqx"  # パラメータなしのVSQX
+VSQX_B = f"./Para_Study_data/vsqx/DYN/{DATA_NAME}_{Para_id}.vsqx"  # パラメータありのVSQX
 
 # ===== 出力設定 =====
-OUTPUT_DIR = f"./src_result/Para_Study_data/output/{Para_id}"
+OUTPUT_DIR = f"./Para_Study_data/output/{Para_id}"
 DPI = 300  # 出力画像の解像度
 FIGSIZE = (18, 28)  # 出力画像サイズ (インチ)
 
 # ===== 音声設定 =====
 SR = 44100
-HOP_LENGTH = 256
+SHIFT_LENGTH = 256
 
 # ===== 注目パラメータ =====
 # None → vsqx_A と vsqx_B のCC差分を自動検出して全て表示
@@ -132,42 +132,4 @@ PARAM_FEATURE_PRESETS = {
 COMPUTE_CORRELATION = True  # 相関係数を算出するか（TOP_N選出には必須）
 SORT_BY_CORRELATION = True  # 相関の強い順にプロットを並べるか
 
-# ===== VSQX解析で使用する定数 (config.py と同一) =====
-ID_MAPPING = {
-    "D": "DYN",
-    "B": "BRE",
-    "R": "BRI",
-    "C": "CLE",
-    "G": "GEN",
-    "T": "POR",
-    "P": "PIT",
-    "S": "PBS",
-    "W": "GWL",
-    "X": "XSY",
-}
 
-DEFAULT_DYNAMIC_VALUES = {
-    "DYN": 64,
-    "BRE": 0,
-    "BRI": 64,
-    "CLE": 0,
-    "GEN": 64,
-    "POR": 64,
-    "PIT": 0,
-    "PBS": 1,
-    "GWL": 0,
-    "XSY": 0,
-}
-
-DYNAMIC_PARAM_IDS = [
-    "DYN",
-    "BRE",
-    "BRI",
-    "CLE",
-    "GEN",
-    "POR",
-    "PIT",
-    "PBS",
-    "GWL",
-    "XSY",
-]

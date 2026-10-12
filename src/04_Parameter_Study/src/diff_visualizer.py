@@ -65,9 +65,9 @@ def _correlation_label(r_abs):
 class DiffVisualizer:
     """差分解析結果の可視化"""
 
-    def __init__(self, sr=44100, hop_length=256, figsize=(18, 28), dpi=300):
+    def __init__(self, sr=44100, shift_length=256, figsize=(18, 28), dpi=300):
         self.sr = sr
-        self.hop_length = hop_length
+        self.shift_length = shift_length
         self.figsize = figsize
         self.dpi = dpi
 
@@ -81,8 +81,8 @@ class DiffVisualizer:
 
         Args:
             param_name: 注目パラメータ名 (例: "DYN")
-            vsqx_data_a: VSQXReader.read() の出力 (default)
-            vsqx_data_b: VSQXReader.read() の出力 (with param)
+            vsqx_data_a: VSQXCompare.read() の出力 (default)
+            vsqx_data_b: VSQXCompare.read() の出力 (with param)
             features_a: AudioAnalyzer.extract_features() の出力
             features_b: AudioAnalyzer.extract_features() の出力
             diff_features: AudioAnalyzer.compute_diff() の出力
@@ -90,7 +90,7 @@ class DiffVisualizer:
             sorted_features: 相関順にソートされた [(name, info), ...]
             param_curve: np.ndarray (T,) — VSQXパラメータ時系列
             default_value: パラメータのデフォルト値
-            static_diffs: VSQXReader.find_static_param_diffs() の出力
+            static_diffs: VSQXCompare.find_static_param_diffs() の出力
             output_path: 出力ファイルパス
         """
         n_feature_plots = len(sorted_features)
@@ -219,7 +219,7 @@ class DiffVisualizer:
         """データ長に対応する時間軸"""
         import librosa
         return librosa.frames_to_time(
-            np.arange(len(data)), sr=self.sr, hop_length=self.hop_length
+            np.arange(len(data)), sr=self.sr, hop_length=self.shift_length
         )
 
     def _add_note_regions(self, ax, notes, alpha=0.08):
