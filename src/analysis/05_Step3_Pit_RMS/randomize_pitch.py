@@ -47,12 +47,14 @@ CONFIG = {
     # (必須) 入力VSQXフォルダ (Step2の分割済みVSQX)
     "input_dir": "./data/Step2/vsqx",
     # (必須) 出力先フォルダ (Step 3のVSQXデータ保存先)
-    "output_dir": "./data/Step_org/Step3_3times",
+    "output_dir": "./data/Step_org/Step3_5times",
     # 音高範囲 (Yamaha規格: C3=60, C6=96, 両端含む37段階)
     "min_note_num": 60,  # C3
     "max_note_num": 96,  # C6
     # Trainデータのバリエーション生成数 (1倍, 2倍, 3倍... 各バリエーションで音高を変更)
-    "num_train_variations": 3,
+    "num_train_variations": 5,
+    # Trainバリエーション生成時の巡回ストライド幅 (同系列DYNグループ間の重複を避け別グループへジャンプさせる幅)
+    "variation_stride": 11,
     # Validデータに排他配分する未網羅ペア数 (各母音あたり: 2 -> 5母音で計10種)
     "valid_unseen_per_vowel": 2,
     # Testデータに排他配分する未網羅ペア数 (各母音あたり: 2 -> 5母音で計10種)
@@ -302,6 +304,7 @@ def allocate_all_pitches(
     valid_unseen_per_vowel: int,
     test_unseen_per_vowel: int,
     rng: random.Random,
+    variation_stride: int = 11,
 ) -> tuple[
     dict[int, dict[str, int]],
     dict[str, int],
@@ -363,9 +366,10 @@ def allocate_all_pitches(
 
     # 3. Train の各バリエーション (1..num_train_variations) への割り当て
     # 既知音高 (30音高) 内での巡回シフトにより、同一曲の音高重複を完全排除 & 同一DYNパターン内の母音重複もゼロ
+    # variation_stride (デフォルト11) により、隣接する同系列DYNグループ (1〜8, 9〜16等) を飛び越えて別グループの音高を配分
     train_var_assignments = {}
     for var_idx in range(1, num_train_variations + 1):
-        shift_k = (var_idx - 1) % num_train_pats
+        shift_k = ((var_idx - 1) * variation_stride) % num_train_pats
         var_assign = {}
         for k_idx, dyn_id in enumerate(train_dyn_ids):
             source_dyn_id = train_dyn_ids[(k_idx + shift_k) % num_train_pats]
@@ -407,6 +411,7 @@ def process_randomize_pitch(config: dict):
     min_note = config.get("min_note_num", 60)
     max_note = config.get("max_note_num", 96)
     num_train_variations = config.get("num_train_variations", 3)
+    variation_stride = config.get("variation_stride", 11)
     valid_unseen_per_vowel = config.get("valid_unseen_per_vowel", 2)
     test_unseen_per_vowel = config.get("test_unseen_per_vowel", 2)
     benchmark_rep_pattern = config.get("benchmark_rep_pattern", 1)
@@ -423,6 +428,7 @@ def process_randomize_pitch(config: dict):
     print(f"Input Directory          : {input_dir}")
     print(f"Output Directory         : {output_dir}")
     print(f"Train Variations         : {num_train_variations} 倍 (階層: 1/, 2/, ...)")
+    print(f"Variation Stride         : {variation_stride} (グループ越境ストライド)")
     print(
         f"Pitch Range              : Note {min_note} ({note_num_to_name(min_note)}) 〜 "
         f"Note {max_note} ({note_num_to_name(max_note)}) [{max_note - min_note + 1} steps]"
@@ -482,6 +488,7 @@ def process_randomize_pitch(config: dict):
         valid_unseen_per_vowel,
         test_unseen_per_vowel,
         rng,
+        variation_stride=variation_stride,
     )
 
     split_files = defaultdict(list)
