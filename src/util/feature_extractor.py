@@ -663,7 +663,7 @@ class AudioFeatureExtractor:
             "loudness",
         ]:
             return 1
-        elif f_type in ["bark", "bark_spectrogram"]:
+        elif f_type == "bark":
             return self.config["bark"]["n_barks"]
         elif f_type == "spectral_contrast":
             return 7

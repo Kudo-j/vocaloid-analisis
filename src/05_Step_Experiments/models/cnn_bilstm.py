@@ -39,6 +39,24 @@ except ModuleNotFoundError:
     from directional_gate import DirectionalGate
 
 
+class ChannelLayerNorm(nn.Module):
+    """
+    (Batch, Channels, Seq) 形状のテンソルに対し、
+    チャネル軸（Channels）に沿って各時刻独立に Layer Normalization を適用するモジュール。
+    他サンプルの干渉や時間の巻き添えを一切起こさず、チャネル間の相対表現を安定化します。
+    """
+
+    def __init__(self, num_channels, eps=1e-5):
+        super().__init__()
+        self.ln = nn.LayerNorm(num_channels, eps=eps)
+
+    def forward(self, x):
+        # x: (Batch, Channels, Seq) -> (Batch, Seq, Channels)
+        x = x.transpose(1, 2)
+        x = self.ln(x)
+        return x.transpose(1, 2)
+
+
 class CNNBiLSTM(nn.Module):
     """
     CNN + Bi-LSTM モデル (DirectionalGate オプション付き)。
@@ -53,6 +71,7 @@ class CNNBiLSTM(nn.Module):
         num_layers: Bi-LSTM の層数。
         dropout: Bi-LSTM のドロップアウト率。
         use_gate: 双方向ゲート層 (DirectionalGate) を使用するかどうか。
+        norm_type: 正規化手法 ("layer_norm", "batch_norm", "weight_norm", "none")。デフォルトは "layer_norm"。
     """
 
     def __init__(
@@ -66,11 +85,13 @@ class CNNBiLSTM(nn.Module):
         num_layers=1,
         dropout=0.3,
         use_gate=False,
+        norm_type="layer_norm",
         **kwargs,
     ):
         super().__init__()
 
         self.use_gate = use_gate
+        self.norm_type = norm_type
         embed_dim = hidden_dim * 2
 
         # --- ConvBlock ---
@@ -80,20 +101,33 @@ class CNNBiLSTM(nn.Module):
         conv_layers_list = []
         for i in range(num_conv_layers):
             in_channels = input_dim if i == 0 else conv_channels
-            conv_layers_list.extend(
-                [
-                    nn.Conv1d(
-                        in_channels,
-                        conv_channels,
-                        kernel_size,
-                        padding=padding,
-                        padding_mode="reflect",
-                        bias=False,
-                    ),
-                    nn.BatchNorm1d(conv_channels),
-                    nn.ReLU(),
-                ]
+            use_bias = False if norm_type == "batch_norm" else True
+            conv = nn.Conv1d(
+                in_channels,
+                conv_channels,
+                kernel_size,
+                padding=padding,
+                padding_mode="reflect",
+                bias=use_bias,
             )
+
+            layers = []
+            if norm_type == "weight_norm":
+                conv = nn.utils.weight_norm(conv)
+                layers.append(conv)
+            elif norm_type == "batch_norm":
+                layers.append(conv)
+                layers.append(nn.BatchNorm1d(conv_channels))
+            elif norm_type == "layer_norm":
+                layers.append(conv)
+                layers.append(ChannelLayerNorm(conv_channels))
+            elif norm_type == "none":
+                layers.append(conv)
+            else:
+                raise ValueError(f"未知の norm_type: {norm_type}")
+
+            layers.append(nn.ReLU())
+            conv_layers_list.extend(layers)
         self.conv_block = nn.Sequential(*conv_layers_list)
 
         # --- Bi-LSTM ---
