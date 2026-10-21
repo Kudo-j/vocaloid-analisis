@@ -244,9 +244,9 @@ class VSQXDNNFormatter(VSQXParser):
             # 5. ノート位置・継続時間特徴量の計算
             if note_frames > 0:
                 f_elapsed = np.arange(note_frames, dtype=np.float32)
-                note_elapse_ts[s_idx:e_idx] = f_elapsed / self.max_note_frames
+                note_elapse_ts[s_idx:e_idx] = (f_elapsed + 1.0) / self.max_note_frames
                 note_remain_ts[s_idx:e_idx] = (note_frames - f_elapsed) / self.max_note_frames
-                note_progress_ts[s_idx:e_idx] = f_elapsed / note_frames
+                note_progress_ts[s_idx:e_idx] = (f_elapsed + 1.0) / note_frames
                 note_duration_norm_ts[s_idx:e_idx] = note_frames / self.max_note_frames
 
         # --- 動的パラメータの補間 ---
