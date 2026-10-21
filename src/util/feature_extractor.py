@@ -24,6 +24,9 @@ class AudioFeatureExtractor:
 
         # デフォルト設定
         self.config = {
+            "global_mel_ref": 1.0,  # 絶対基準 (1.0)。曲間の絶対音量差 (DYN) を保持する
+            "global_stft_ref": 1.0,  # 絶対基準 (1.0)
+            "global_bark_ref": 1.0,  # 絶対基準 (1.0)
             "cqt": {
                 "n_bins": 168,
                 "bins_per_octave": 24,
@@ -47,9 +50,10 @@ class AudioFeatureExtractor:
             "bark": {
                 "n_barks": 24,
                 "n_fft": 1024,
-                "compression": "power",  # "power" (Stevensべき乗則 0.33) または "db"
+                "formula": "traunmuller",  # "traunmuller" または "zwicker"
+                "compression": "db",  # デフォルト: "db" (STFT->Bark->Log/dB)。将来用: "power" (0.33乗)
                 "power_exponent": 0.33,
-                "use_equal_loudness": True,
+                "use_equal_loudness": False,  # 将来用: 等ラウドネス補正
             },
             "loudness": {
                 "n_barks": 24,
@@ -119,7 +123,7 @@ class AudioFeatureExtractor:
             n_mels=params["n_mels"],
             fmax=params["fmax"],
         )
-        ref_val = self.config.get("global_mel_ref", np.max)
+        ref_val = self.config.get("global_mel_ref", 1.0)
         # global_mel_ref が設定されている場合、top_db クランプを無効化する。
         # top_db はファイルごとの最大値に依存するため、共通基準使用時にはズレの原因になる。
         use_top_db = None if isinstance(ref_val, (int, float, np.floating)) else 80.0
@@ -168,7 +172,7 @@ class AudioFeatureExtractor:
             n_mels=mel_params["n_mels"],
             fmax=mel_params["fmax"],
         )
-        ref_val = self.config.get("global_mel_ref", np.max)
+        ref_val = self.config.get("global_mel_ref", 1.0)
         use_top_db = None if isinstance(ref_val, (int, float, np.floating)) else 80.0
         log_S = librosa.power_to_db(S, ref=ref_val, top_db=use_top_db)
 
@@ -194,7 +198,7 @@ class AudioFeatureExtractor:
             win_length=params["win_length"],
             window=params["window"],
         )
-        ref_val = self.config.get("global_stft_ref", np.max)
+        ref_val = self.config.get("global_stft_ref", 1.0)
         use_top_db = None if isinstance(ref_val, (int, float, np.floating)) else 80.0
         D_db = librosa.amplitude_to_db(np.abs(D), ref=ref_val, top_db=use_top_db)
         return D_db.T
@@ -350,27 +354,52 @@ class AudioFeatureExtractor:
         ).T
 
     # --- バーク尺度および等ラウドネス補正ヘルパー ---
-    def _get_bark_filterbank(self, n_fft, n_barks=24):
+    def _get_bark_filterbank(self, n_fft, n_barks=24, formula=None):
         """
-        Traunmuller (1990) の式に基づく24バンド臨界帯域三角フィルタバンク行列を生成。
+        臨界帯域三角フィルタバンク行列を生成。
+
+        Args:
+            n_fft (int): FFT点数
+            n_barks (int): バーク帯域数（デフォルト24）
+            formula (str, optional): "traunmuller" または "zwicker"。Noneの場合はconfigに従う。
+
         Returns:
             fb (np.ndarray): (n_barks, n_fft // 2 + 1)
             freqs (np.ndarray): (n_fft // 2 + 1,)
         """
         freqs = np.fft.rfftfreq(n_fft, 1.0 / self.sr)
-        # Traunmuller (1990): z = 26.81 * f / (1960 + f) - 0.53
-        bark_freqs = np.maximum(0.0, 26.81 * freqs / (1960.0 + freqs) - 0.53)
+        formula_to_use = formula or self.config.get("bark", {}).get("formula", "traunmuller")
+
+        if formula_to_use.lower() in ["zwicker", "zwicker_terhardt"]:
+            # Zwicker & Terhardt (1980):
+            # z = 13 * arctan(0.00076 * f) + 3.5 * arctan((f / 7500)^2)
+            bark_freqs = 13.0 * np.arctan(0.00076 * freqs) + 3.5 * np.arctan((freqs / 7500.0) ** 2)
+        elif formula_to_use.lower() in ["traunmuller", "traunmueller"]:
+            # Traunmüller (1990):
+            # z' = 26.81 * f / (1960 + f) - 0.53
+            # z < 2.0 の端点補正: z = z' + 0.15 * (2.0 - z')
+            # z > 20.1 の端点補正: z = z' + 0.22 * (z' - 20.1)
+            z = 26.81 * freqs / (1960.0 + freqs) - 0.53
+            low_mask = z < 2.0
+            z[low_mask] = z[low_mask] + 0.15 * (2.0 - z[low_mask])
+            high_mask = z > 20.1
+            z[high_mask] = z[high_mask] + 0.22 * (z[high_mask] - 20.1)
+            bark_freqs = np.maximum(0.0, z)
+        else:
+            raise ValueError(f"Unknown Bark formula: {formula_to_use}. Choose 'traunmuller' or 'zwicker'.")
+
         centers = np.linspace(1.0, 24.0, n_barks)
+        delta = centers[1] - centers[0] if n_barks > 1 else 1.0
         fb = np.zeros((n_barks, len(freqs)), dtype=np.float32)
         for i, c in enumerate(centers):
-            # 三角フィルタ（帯域幅 +-1 Bark）
-            fb[i] = np.maximum(0.0, 1.0 - np.abs(bark_freqs - c))
+            # 三角フィルタ（帯域幅 +-delta Bark）
+            fb[i] = np.maximum(0.0, 1.0 - np.abs(bark_freqs - c) / delta)
         return fb, freqs
 
     def _get_equal_loudness_curve(self, freqs):
         """
-        Terhardt (1979) / ISO 226 近似による等ラウドネス周波数重み付け曲線（40 phon基準）。
-        1kHz〜4kHzを強調し、低域と超高域を減衰させる。
+        Hermansky (1990) / ISO 226 近似による等ラウドネス周波数重み付け曲線。
+        （将来の比較実験・PLP拡張用）
         """
         f_sq = freqs**2
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -383,25 +412,30 @@ class AudioFeatureExtractor:
             eq /= max_val
         return eq.astype(np.float32)
 
-    # --- バークスペクトログラム (比ラウドネス分布: 24次元) ---
-    def _compute_bark_spectrogram(self, y):
+    # --- バークスペクトログラム (24次元: Traunmuller または Zwicker & Terhardt) ---
+    def _compute_bark_spectrogram(self, y, formula=None):
         """
-        24次元のバークスペクトログラム（比ラウドネスまたはBarkパワースペクトル）。
-        メルスペクトログラムの比較・代替用。
+        24次元のバークスペクトログラム（STFT -> Barkフィルタバンク -> 対数dB変換）。
+        メルスペクトログラムとの公平な比較用。
+
+        Args:
+            y (np.ndarray): 音声波形
+            formula (str, optional): "traunmuller" または "zwicker"。Noneの場合はconfigに従う。
         """
         params = self.config["bark"]
         n_fft = params["n_fft"]
         n_barks = params["n_barks"]
-        use_eq = params["use_equal_loudness"]
-        compression = params["compression"]
-        exponent = params["power_exponent"]
+        formula_to_use = formula or params.get("formula", "traunmuller")
+        use_eq = params.get("use_equal_loudness", False)
+        compression = params.get("compression", "db")
+        exponent = params.get("power_exponent", 0.33)
 
         # STFT パワースペクトル (|D|^2)
         D = librosa.stft(y, n_fft=n_fft, hop_length=self.shift_length)
         power_spec = np.abs(D) ** 2
 
-        # フィルタバンクと等ラウドネス曲線
-        fb, freqs = self._get_bark_filterbank(n_fft, n_barks)
+        # フィルタバンク生成
+        fb, freqs = self._get_bark_filterbank(n_fft, n_barks, formula=formula_to_use)
         if use_eq:
             eq = self._get_equal_loudness_curve(freqs)
             power_spec = power_spec * eq[:, None]
@@ -410,12 +444,12 @@ class AudioFeatureExtractor:
         bark_energy = np.dot(fb, power_spec)
 
         if compression == "power":
-            # Stevensのべき法則による比ラウドネス (Sone/Bark相当)
+            # Stevensのべき乗則による比ラウドネス (将来の比較用: Sone/Bark相当)
             spec_loudness = np.maximum(bark_energy, 1e-10) ** exponent
             return spec_loudness.T
         elif compression == "db":
-            # 対数dB表現
-            ref_val = self.config.get("global_stft_ref", np.max)
+            # 現代の標準的バークスペクトログラム: 対数dB表現 (絶対基準 ref=1.0)
+            ref_val = self.config.get("global_bark_ref", 1.0)
             use_top_db = (
                 None if isinstance(ref_val, (int, float, np.floating)) else 80.0
             )
@@ -530,7 +564,7 @@ class AudioFeatureExtractor:
             n_mels=params["n_mels"],
             fmax=params["fmax"],
         )
-        ref_val = self.config.get("global_mel_ref", np.max)
+        ref_val = self.config.get("global_mel_ref", 1.0)
         use_top_db = None if isinstance(ref_val, (int, float, np.floating)) else 80.0
         return librosa.power_to_db(mel, ref=ref_val, top_db=use_top_db).T
 
@@ -566,7 +600,7 @@ class AudioFeatureExtractor:
             win_length=params["win_length"],
             window=params["window"],
         )
-        ref_val = self.config.get("global_stft_ref", np.max)
+        ref_val = self.config.get("global_stft_ref", 1.0)
         use_top_db = None if isinstance(ref_val, (int, float, np.floating)) else 80.0
         D_db = librosa.amplitude_to_db(np.abs(D), ref=ref_val, top_db=use_top_db)
         return D_db.T
@@ -624,8 +658,10 @@ class AudioFeatureExtractor:
                 feat = self._compute_source_rms(y)
             elif f_type == "source_stft":
                 feat = self._compute_source_stft(y)
-            elif f_type == "bark":
-                feat = self._compute_bark_spectrogram(y)
+            elif f_type == "bark_traunmuller":
+                feat = self._compute_bark_spectrogram(y, formula="traunmuller")
+            elif f_type == "bark_zwicker":
+                feat = self._compute_bark_spectrogram(y, formula="zwicker")
             elif f_type == "loudness":
                 feat = self._compute_loudness(y)
             else:
@@ -663,7 +699,7 @@ class AudioFeatureExtractor:
             "loudness",
         ]:
             return 1
-        elif f_type == "bark":
+        elif f_type in ["bark_traunmuller", "bark_zwicker"]:
             return self.config["bark"]["n_barks"]
         elif f_type == "spectral_contrast":
             return 7
