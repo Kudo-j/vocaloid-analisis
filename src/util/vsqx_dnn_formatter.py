@@ -327,20 +327,47 @@ class VSQXDNNFormatter(VSQXParser):
         for pid, val in raw_data["melody"].items():
             max_v = self.vsqx_config["NOTE_PARAM_MAX_VALUES"].get(pid, 1.0)
             if pid == "NOTE_NUMBER":
-                # 3次元滑らか音高螺旋 (Pitch Helix)
+                # 1. 旧デザイン (1次元スカラー: 正規化音高のみ)
+                # 有声区間は (val / max_v) * 2.0 - 1.0、休符区間は -1.0
+                height_z = np.where(
+                    is_voiced, (val / max_v) * 2.0 - 1.0, -1.0
+                ).astype(np.float32)
+                height_z_1d = height_z[:, np.newaxis]
+                flat_normalized["NOTE_NUMBER_SCALAR"] = height_z_1d
+
+                # 2. 新デザイン (3次元滑らか音高螺旋: Pitch Helix)
                 # 成分1, 2 (Chroma X, Chroma Y): 12平均律の周期性 (単位円座標)
                 # 成分3 (Pitch Height Z): 音高の絶対的な高さ (-1.0 〜 1.0)
                 # 休符区間 (is_voiced == False) では Chroma は (0.0, 0.0)（原点＝無音）、Z は -1.0 とする
                 theta = 2.0 * np.pi * (val % 12.0) / 12.0
                 chroma_x = np.where(is_voiced, np.cos(theta), 0.0).astype(np.float32)
                 chroma_y = np.where(is_voiced, np.sin(theta), 0.0).astype(np.float32)
-                height_z = np.where(
-                    is_voiced, (val / max_v) * 2.0 - 1.0, -1.0
+                norm_val_helix = np.stack([chroma_x, chroma_y, height_z], axis=-1)
+                flat_normalized[pid] = norm_val_helix
+                flat_normalized["NOTE_NUMBER_HELIX"] = norm_val_helix
+
+                # 3. ワンホットデザイン (13次元ハイブリッド音高表現: 音名ワンホット 12次元 + 音高スカラー 1次元)
+                # 第0〜11成分 (Pitch Class One-Hot): C=0, C#=1, ..., B=11 の12次元ワンホット
+                # 第12成分 (Pitch Height Z): 音高の絶対的な高さ (-1.0 〜 1.0)
+                # 休符区間 (is_voiced == False) では全音名 0.0、Z は -1.0 とする
+                pitch_class = np.mod(val.astype(int), 12)
+                one_hot_12 = np.eye(12, dtype=np.float32)[pitch_class]
+                one_hot_12 = np.where(
+                    is_voiced[:, np.newaxis], one_hot_12, 0.0
                 ).astype(np.float32)
-                norm_val = np.stack([chroma_x, chroma_y, height_z], axis=-1)
+                norm_val_onehot = np.concatenate([one_hot_12, height_z_1d], axis=-1)
+                flat_normalized["NOTE_NUMBER_ONEHOT"] = norm_val_onehot
+
+                # 4. 音名ワンホット (13次元純粋One-Hot表現: 音名12次元 + 休符1次元)
+                # 第0〜11成分: C=0, C#=1, ..., B=11 の12音名 (有声区間)
+                # 第12成分: 休符・無音 (休符区間 is_voiced == False では第12成分が1.0、他は0.0)
+                # 全フレームが「1成分のみ1.0、他0.0」の完全なOne-hotとなり、BranchEmbedding (torch.argmax) での休符とC音の衝突を防止する
+                pitch_class_idx = np.where(is_voiced, np.mod(val.astype(int), 12), 12)
+                one_hot_13 = np.eye(13, dtype=np.float32)[pitch_class_idx]
+                flat_normalized["NOTE_CLASS_ONEHOT"] = one_hot_13
             else:
                 norm_val = (val / max_v)[:, np.newaxis]
-            flat_normalized[pid] = norm_val
+                flat_normalized[pid] = norm_val
 
         # 4. Static
         for pid, val in raw_data["static"].items():
