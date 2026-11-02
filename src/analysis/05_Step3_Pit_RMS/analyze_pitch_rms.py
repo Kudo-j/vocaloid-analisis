@@ -49,7 +49,7 @@ except ImportError:
 # =============================================================================
 CONFIG = {
     # (必須) 分析対象WAVフォルダ
-    "wav_dir": "D:/黒岩研究室/卒研/26Voca_Ana/data/Step3/Step3_Test1音高網羅/output-wav",
+    "wav_dir": "./data/Step3/Step3_Test1音高網羅/output-wav",
     # (必須) 出力先ディレクトリ (グラフ画像、Excelレポート保存先)
     "output_dir": "./output/pitch_rms_analysis",
     # 音高範囲 (Yamaha規格: C3=60 〜 C6=96, 両端含む37段階)

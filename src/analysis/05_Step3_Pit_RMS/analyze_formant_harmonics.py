@@ -35,7 +35,7 @@ plt.rcParams["axes.unicode_minus"] = False
 # =============================================================================
 CONFIG = {
     # 分析対象WAVフォルダ
-    "wav_dir": "D:/黒岩研究室/卒研/26Voca_Ana/data/Step3/Step3_Test1音高網羅/output-wav",
+    "wav_dir": "./data/Step3/Step3_Test1音高網羅/output-wav",
     # 出力先ディレクトリ
     "output_dir": "./output/formant_harmonic_analysis",
     # LPC分析パラメータ

@@ -13,16 +13,16 @@ from pathlib import Path
 # ============================================================
 
 # 指定フォルダ: ずれたファイル (.npz 等) があるフォルダ
-OUTLIER_DIR = r"d:\黒岩研究室\卒研\26Voca_Ana\src_result\augDYN_DYN_srcrms\outlier"
+OUTLIER_DIR = r"./augDYN_DYN_srcrms/outlier"
 
 # 移動元フォルダ: 元となる .vsqx が入ったフォルダ（サブフォルダも含めて探索）
-SRC_VSQX_DIR = r"d:\黒岩研究室\卒研\26Voca_Ana\src_result\use_vsqx"
+SRC_VSQX_DIR = r"./use_vsqx"
 
 # 移動先フォルダ: ずれている .vsqx を移動させる先のフォルダ
-DEST_VSQX_DIR = r"d:\黒岩研究室\卒研\26Voca_Ana\src_result\use_vsqx_outlier"
+DEST_VSQX_DIR = r"./use_vsqx_outlier"
 
 # 見つからなかったファイルが 10 個以上ある場合に出力するテキストファイルのパス
-MISSING_LOG_FILE = r"d:\黒岩研究室\卒研\26Voca_Ana\src_result\missing_vsqx_list.txt"
+MISSING_LOG_FILE = r"./missing_vsqx_list.txt"
 
 # ============================================================
 
